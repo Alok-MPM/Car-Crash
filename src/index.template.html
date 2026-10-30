@@ -48,10 +48,17 @@ button:active{transform:scale(.97)}
 #steerPad{left:calc(14px + var(--sal));bottom:calc(14px + var(--sab));width:min(270px,38vw);height:96px;border-radius:48px}
 #steerKnob{position:absolute;top:8px;width:80px;height:80px;border-radius:40px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.4);left:calc(50% - 40px);pointer-events:none}
 #steerPad .lab{position:absolute;top:50%;transform:translateY(-50%);font-size:20px;opacity:.55;pointer-events:none}
-#gas{right:calc(14px + var(--sar));bottom:calc(14px + var(--sab));width:96px;height:150px}
-#brk{right:calc(122px + var(--sar));bottom:calc(14px + var(--sab));width:96px;height:112px}
-#hbk{right:calc(122px + var(--sar));bottom:calc(136px + var(--sab));width:96px;height:46px;font-size:12px}
-#hornT{right:calc(14px + var(--sar));bottom:calc(172px + var(--sab));width:60px;height:46px;font-size:12px}
+#gas{right:calc(14px + var(--sar));bottom:calc(14px + var(--sab));width:92px;height:200px;overflow:hidden;align-items:flex-start;padding-top:12px}
+#brk{right:calc(114px + var(--sar));bottom:calc(14px + var(--sab));width:92px;height:200px;overflow:hidden;align-items:flex-start;padding-top:12px}
+.ped .fill{position:absolute;left:0;right:0;bottom:0;height:0;pointer-events:none}
+#gas .fill{background:linear-gradient(0deg,rgba(255,106,26,.85),rgba(255,176,46,.85))}
+#brk .fill{background:linear-gradient(0deg,rgba(255,59,48,.85),rgba(255,120,90,.85))}
+.ped .lab2{position:relative;z-index:1;text-shadow:0 1px 3px rgba(0,0,0,.7);text-align:center;line-height:1.3;pointer-events:none}
+.ped small{display:block;font-size:13px;font-weight:700;opacity:.9}
+#touch .ped.on{background:rgba(14,18,24,.55);border-color:var(--accent)}
+#hbk{right:calc(114px + var(--sar));bottom:calc(224px + var(--sab));width:92px;height:46px;font-size:12px}
+#revT{right:calc(214px + var(--sar));bottom:calc(14px + var(--sab));width:60px;height:60px;font-size:22px}
+#hornT{right:calc(14px + var(--sar));bottom:calc(224px + var(--sab));width:92px;height:46px;font-size:12px}
 
 #menu{position:fixed;inset:0;display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(4,6,9,.88),rgba(4,6,9,.55) 40%,rgba(4,6,9,.9));padding:calc(14px + var(--sat)) calc(14px + var(--sar)) calc(14px + var(--sab)) calc(14px + var(--sal));overflow:auto;touch-action:pan-y}
 #menu.hidden{display:none}
@@ -100,13 +107,14 @@ label.t{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(-
   <div id="topbtns">
     <button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
   </div>
-  <div id="hint"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive &nbsp; <kbd>Space</kbd> handbrake &nbsp; <kbd>C</kbd> camera<br><kbd>R</kbd> flip upright &nbsp; <kbd>E</kbd> repair &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>Esc</kbd> garage</div>
+  <div id="hint"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive &nbsp; <kbd>Space</kbd> handbrake &nbsp; <kbd>C</kbd> camera<br><kbd>Q</kbd> reverse &nbsp; <kbd>R</kbd> flip upright &nbsp; <kbd>E</kbd> repair &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>Esc</kbd> garage</div>
 </div>
 <div id="touch">
   <div id="steerPad" class="ctl"><span class="lab" style="left:16px">◀</span><span class="lab" style="right:16px">▶</span><div id="steerKnob"></div></div>
-  <div id="brk" class="ctl">BRAKE</div>
-  <div id="gas" class="ctl">GAS</div>
+  <div id="brk" class="ctl ped"><div class="fill"></div><div class="lab2">BRAKE<small>0%</small></div></div>
+  <div id="gas" class="ctl ped"><div class="fill"></div><div class="lab2">GAS<small>0%</small></div></div>
   <div id="hbk" class="ctl">HANDBRAKE</div>
+  <div id="revT" class="ctl">D</div>
   <div id="hornT" class="ctl">HORN</div>
 </div>
 <div id="menu">

@@ -95,7 +95,7 @@ export class Vehicle {
       };
     };
     this.wheels = [mk(-1, true), mk(1, true), mk(-1, false), mk(1, false)];
-    this.in = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
+    this.in = { throttle: 0, brake: 0, steer: 0, handbrake: 0, reverse: 0 };
     this.bp = 0;
     this.assist = 1; // 0 pro, 1 sport (ABS+TC), 2 casual (+stability)
     this.gear = 1;
@@ -153,12 +153,9 @@ export class Vehicle {
 
     // ---- pedals / gear direction
     let drive = inp.throttle, brk = inp.brake;
-    if (this.gear < 0) {
-      if (inp.throttle > 0.05 && vf > -1.5) this.gear = 1;
-      else { drive = inp.brake; brk = inp.throttle; }
-    } else if (inp.brake > 0.05 && vf < 0.7 && inp.throttle < 0.05) {
-      this.gear = -1; drive = inp.brake; brk = 0;
-    }
+    // reverse is a deliberate gear selection (R toggle), only when (nearly) stopped
+    if (inp.reverse && this.gear >= 0 && Math.abs(vf) < 2) this.gear = -1;
+    else if (!inp.reverse && this.gear < 0 && Math.abs(vf) < 2) this.gear = 1;
     // ---- steering
     const lockSpd = 0.62 / (1 + Math.pow(speed / 13, 1.6));
     let target = inp.steer * lockSpd + this.health.steerBias;
@@ -219,7 +216,7 @@ export class Vehicle {
     }
     // gear changes
     if (this.gear > 0 && this.shiftT <= 0) {
-      if (rpmIn > s.redline * 0.955 && this.gear < nG) { this.gear++; this.shiftT = s.shiftTime; }
+      if (rpmIn > s.redline * 0.955 && this.gear < nG && Math.abs(vf) * 3.6 > P.gearSpeed[this.gear - 1] * 0.6) { this.gear++; this.shiftT = s.shiftTime; }
       else if (this.gear > 1) {
         const rpmDown = (rpmIn * P.ratios[this.gear - 2]) / P.ratios[this.gear - 1];
         if (rpmDown < s.redline * 0.9 && (rpmIn < s.redline * 0.3 || (tl > 0.85 && rpmIn < P.peakRpm * 0.6))) { this.gear--; this.shiftT = s.shiftTime * 0.6; }
@@ -332,8 +329,8 @@ export class Vehicle {
       let Tbrake = 0;
       const bm = w.front ? P.bMax[0] : P.bMax[1];
       const fade = 1 - clamp(((w.bTemp || 25) - 450) / 800, 0, 0.55);
-      if (this.bp > 0.015 || brk > 0.02) Tbrake += Math.max(brk, this.gear < 0 ? 0 : this.bp) * bm * fade;
-      if (!w.front && inp.handbrake > 0.02) Tbrake += inp.handbrake * bm * 3;
+      if (this.bp > 0.015 || brk > 0.02) Tbrake += Math.max(brk, this.bp) * bm * fade;
+      if (!w.front && inp.handbrake > 0.02) Tbrake += inp.handbrake * bm * 12;
       if (w.detached) { w.omega *= 0.99; continue; }
 
       if (!w.grounded) {
@@ -406,7 +403,7 @@ export class Vehicle {
       // disc heat: brake power in, airflow cooling out
       w.bTemp = (w.bTemp || 25) + (Tb * Math.abs(w.omega) * dt) / 4200 - ((w.bTemp || 25) - 25) * (0.008 + 0.0025 * speed) * dt;
       const Trr = 0.013 * Fn * w.R;
-      const sg = clamp(w.omega / 0.6, -1, 1);
+      const sg = clamp(w.omega / 0.12, -1, 1);
       const Tres = (Tb + Trr) * sg;
       const dOm = (Tdrive - Tres - w.R * Fx) / (Iw / dt + w.R * D);
       let om = w.omega + dOm;

@@ -159,13 +159,14 @@ world.onScrape = (body, c) => { if (body.userData && body.userData.car === playe
 // ---------- input ----------
 const keys = {};
 const inp = { throttle: 0, brake: 0, steer: 0, hb: 0 };
-let steerKb = 0, tiltSteer = 0, touchSteer = 0, touchGas = 0, touchBrk = 0, touchHb = 0, touchHorn = 0;
+let kbThr = 0, kbBrk = 0, pedThr = 0, pedBrk = 0, steerKb = 0, tiltSteer = 0, touchSteer = 0, touchGas = 0, touchBrk = 0, touchHb = 0, touchHorn = 0;
 let horn = false;
 addEventListener('keydown', (e) => {
   if (e.repeat) { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault(); return; }
   keys[e.code] = true;
   if (e.code === 'KeyC') cycleCam();
   if (e.code === 'KeyR') flipUpright();
+  if (e.code === 'KeyQ') toggleRev();
   if (e.code === 'KeyE') repair();
   if (e.code === 'KeyT') nextTod();
   if (e.code === 'KeyM') toggleSound();
@@ -188,8 +189,9 @@ function readInput(dt) {
   const rate = tgt === 0 ? 6 : tgt * steerKb < 0 ? 8 : 3.2 / (1 + speed / 40);
   steerKb += clamp(tgt - steerKb, -rate * dt, rate * dt);
   st = steerKb;
-  th = keys.KeyW || keys.ArrowUp ? 1 : 0;
-  br = keys.KeyS || keys.ArrowDown ? 1 : 0;
+  kbThr += ((keys.KeyW || keys.ArrowUp ? 1 : 0) - kbThr) * (1 - Math.exp(-dt * ((keys.KeyW || keys.ArrowUp) ? 7 : 14)));
+  kbBrk += ((keys.KeyS || keys.ArrowDown ? 1 : 0) - kbBrk) * (1 - Math.exp(-dt * ((keys.KeyS || keys.ArrowDown) ? 9 : 16)));
+  th = kbThr < 0.01 ? 0 : kbThr; br = kbBrk < 0.01 ? 0 : kbBrk;
   hb = keys.Space ? 1 : 0;
   hn = !!keys.KeyH;
   // gamepad
@@ -207,13 +209,24 @@ function readInput(dt) {
   }
   // touch
   if (isTouch) {
-    th = Math.max(th, touchGas); br = Math.max(br, touchBrk); hb = Math.max(hb, touchHb); hn = hn || !!touchHorn;
+    pedThr += (touchGas - pedThr) * (1 - Math.exp(-dt * (touchGas > pedThr ? 16 : 10)));
+    pedBrk += (touchBrk - pedBrk) * (1 - Math.exp(-dt * (touchBrk > pedBrk ? 16 : 10)));
+    th = Math.max(th, pedThr < 0.01 ? 0 : pedThr); br = Math.max(br, pedBrk < 0.01 ? 0 : pedBrk); hb = Math.max(hb, touchHb); hn = hn || !!touchHorn;
     if (S.tilt) st = clamp(tiltSteer, -1, 1); else if (Math.abs(touchSteer) > 0.02) st = touchSteer;
   }
   inp.throttle = th; inp.brake = br; inp.steer = st; inp.hb = hb;
+  if (isTouch) setPed();
   horn = hn;
 }
 
+const pedEls = {};
+function setPed() {
+  for (const [id, val] of [['gas', inp.throttle], ['brk', inp.brake]]) {
+    const el = pedEls[id] || (pedEls[id] = { f: $(id).querySelector('.fill'), s: $(id).querySelector('small'), v: -1 });
+    const p = Math.round(val * 100);
+    if (p !== el.v) { el.v = p; el.f.style.height = p + '%'; el.s.textContent = p + '%'; }
+  }
+}
 // touch controls
 function bindTouch() {
   const hold = (el, on, off) => {
@@ -221,9 +234,18 @@ function bindTouch() {
     const up = (e) => { el.classList.remove('on'); off(e); };
     el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   };
-  hold($('gas'), () => (touchGas = 1), () => (touchGas = 0));
-  hold($('brk'), () => (touchBrk = 1), () => (touchBrk = 0));
+  // analog pedals: swipe up/down inside the pedal; the box stays fixed, only the fill level moves
+  const pedal = (el, set) => {
+    const lvl = (e) => { const rc = el.getBoundingClientRect(); const y = 1 - (e.clientY - rc.top) / rc.height; return clamp((y - 0.04) / 0.88, 0, 1); };
+    el.addEventListener('pointerdown', (e) => { el.setPointerCapture(e.pointerId); el.classList.add('on'); set(lvl(e)); e.preventDefault(); });
+    el.addEventListener('pointermove', (e) => { if (el.hasPointerCapture(e.pointerId)) set(lvl(e)); });
+    const up = () => { el.classList.remove('on'); set(0); };
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  };
+  pedal($('gas'), (x) => (touchGas = x));
+  pedal($('brk'), (x) => (touchBrk = x));
   hold($('hbk'), () => (touchHb = 1), () => (touchHb = 0));
+  $('revT').addEventListener('pointerdown', (e) => { toggleRev(); e.preventDefault(); });
   hold($('hornT'), () => (touchHorn = 1), () => (touchHorn = 0));
   const pad = $('steerPad'), knob = $('steerKnob');
   const setS = (e) => {
@@ -322,6 +344,8 @@ function updateCamera(dt) {
 const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 // ---------- game actions ----------
+let reverseOn = 0;
+function toggleRev() { reverseOn = reverseOn ? 0 : 1; const el = $('revT'); if (el) el.textContent = reverseOn ? 'R' : 'D'; toast(reverseOn ? 'Reverse gear' : 'Drive', ''); }
 function flipUpright() {
   if (!player) return;
   const b = player.body;
@@ -408,7 +432,7 @@ function drawGauge() {
   const w = gauge.width, h = gauge.height, g = gctx;
   g.clearRect(0, 0, w, h);
   const v = player.vehicle, spec = player.spec;
-  const cx = w / 2, cy = h * 0.6, R = h * 0.46;
+  const cx = w / 2, cy = h * 0.52, R = h * 0.4;
   const maxRpm = Math.ceil((spec.redline + 300) / 1000) * 1000;
   const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25, span = a1 - a0;
   const f = clamp(v.rpm / maxRpm, 0, 1), rl = spec.redline / maxRpm;
@@ -466,8 +490,9 @@ function drawGauge() {
     g.fillStyle = 'rgba(255,255,255,.5)'; g.font = `700 ${R * 0.085}px system-ui`; g.textAlign = 'left'; g.fillText(label, x, y - 9);
   };
   const bt = Math.max(...v.wheels.map((q) => q.bTemp || 25));
-  bar(24, h - 58, 150, (bt - 25) / 700, bt > 500 ? '#ff3b30' : '#ffb02e', 'BRAKE ' + Math.round(bt) + '°C');
-  if (spec.turbo) bar(w - 174, h - 58, 150, clamp(v.boost, 0, 1), '#4aa8ff', 'BOOST');
+  bar(24, h - 34, 170, inp.brake, '#ff3b30', 'BRAKE ' + Math.round(inp.brake * 100) + '%  ·  disc ' + Math.round(bt) + '°C');
+  bar(w - 194, h - 34, 170, inp.throttle, '#ff7a1a', 'THROTTLE ' + Math.round(inp.throttle * 100) + '%');
+  if (spec.turbo) bar(24, h - 84, 170, clamp(v.boost, 0, 1), '#4aa8ff', 'BOOST');
   g.textAlign = 'center'; g.font = `800 ${R * 0.11}px system-ui`;
   if (v.tcAct > 0.3) { g.fillStyle = '#ffb02e'; g.fillText('TC', cx - R * 0.55, cy + R * 0.7); }
   if (v.absAct > 0.3) { g.fillStyle = '#ffb02e'; g.fillText('ABS', cx - R * 0.8, cy + R * 0.7); }
@@ -573,7 +598,7 @@ function frame(t) {
   scrape = 0;
   readInput(dt);
   if (menuOpen) { player.vehicle.in.throttle = 0; player.vehicle.in.brake = 0.4; player.vehicle.in.steer = 0; player.vehicle.in.handbrake = 1; }
-  else { const vi = player.vehicle.in; vi.throttle = inp.throttle; vi.brake = inp.brake; vi.steer = inp.steer; vi.handbrake = inp.hb; }
+  else { const vi = player.vehicle.in; vi.throttle = inp.throttle; vi.brake = inp.brake; vi.steer = inp.steer; vi.handbrake = inp.hb; vi.reverse = reverseOn; }
   if (slowT > 0) slowT -= dt;
   stepPhysics(dt);
   const sdt = dt * timeScale;
