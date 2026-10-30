@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Crash Yard</title>
+<style>
+:root{
+  --bg:#07090c; --panel:rgba(12,15,20,.74); --panel2:rgba(22,27,35,.86); --line:rgba(255,255,255,.12);
+  --text:#eef1f5; --muted:#98a3b3; --accent:#ff6a1a; --accent2:#ffb02e; --danger:#ff3b30; --ok:#37d67a;
+  --sat:env(safe-area-inset-top,0px); --sar:env(safe-area-inset-right,0px); --sab:env(safe-area-inset-bottom,0px); --sal:env(safe-area-inset-left,0px);
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;background:#000}
+button{font:inherit;color:inherit;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:8px 12px;cursor:pointer;backdrop-filter:blur(8px)}
+button:active{transform:scale(.97)}
+#hud{position:fixed;inset:0;pointer-events:none}
+#hud>*{position:absolute}
+#dmg{left:calc(12px + var(--sal));top:calc(12px + var(--sat));width:min(260px,44vw);background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px;backdrop-filter:blur(8px)}
+#dmg h4{margin:0 0 6px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+#hpbar{height:8px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}
+#hpfill{height:100%;width:100%;background:linear-gradient(90deg,var(--ok),#c8e84a);transition:width .25s,background .25s}
+#cost{font-size:22px;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums}
+#lost{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+#lost span{font-size:10.5px;padding:2px 6px;border-radius:6px;background:rgba(255,59,48,.18);color:#ff9a93;border:1px solid rgba(255,59,48,.35)}
+#stats{left:calc(12px + var(--sal));top:calc(150px + var(--sat));font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 10px;min-width:150px;line-height:1.7}
+#stats b{color:var(--text);font-variant-numeric:tabular-nums}
+#gaugeWrap{right:calc(12px + var(--sar,0px));top:calc(64px + var(--sat));width:min(300px,46vw)}
+#gauge{width:100%;display:block}
+#topbtns{right:calc(12px + var(--sar));top:calc(12px + var(--sat));display:flex;gap:8px;pointer-events:auto;flex-wrap:wrap;justify-content:flex-end;max-width:60vw}
+#topbtns button{padding:8px 11px;font-size:13px}
+#toast{left:50%;top:calc(18% + var(--sat));transform:translateX(-50%);text-align:center;font-size:clamp(18px,3.4vw,30px);font-weight:800;letter-spacing:.02em;text-shadow:0 2px 18px rgba(0,0,0,.7);opacity:0;transition:opacity .25s;white-space:nowrap}
+#toast.show{opacity:1}
+#toast small{display:block;font-size:.5em;font-weight:600;color:var(--accent2);letter-spacing:.14em;text-transform:uppercase}
+#hint{left:calc(12px + var(--sal));bottom:calc(10px + var(--sab));font-size:11px;color:var(--muted);line-height:1.6;max-width:300px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px}
+#hint kbd{background:rgba(255,255,255,.12);border-radius:4px;padding:0 5px;color:var(--text);font:inherit;font-size:10.5px}
+#flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none}
+#vignette{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.5));opacity:.8}
+#redflash{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 40%,rgba(255,30,10,.55));opacity:0}
+
+#touch{position:fixed;inset:0;pointer-events:none;display:none}
+.touch #touch{display:block}
+.touch #hint{display:none}
+#touch .ctl{position:absolute;pointer-events:auto;border:1px solid var(--line);background:rgba(14,18,24,.55);border-radius:22px;display:flex;align-items:center;justify-content:center;font-weight:800;letter-spacing:.06em;color:var(--text);backdrop-filter:blur(6px);touch-action:none}
+#touch .ctl.on{background:rgba(255,106,26,.55);border-color:var(--accent)}
+#steerPad{left:calc(14px + var(--sal));bottom:calc(14px + var(--sab));width:min(270px,38vw);height:96px;border-radius:48px}
+#steerKnob{position:absolute;top:8px;width:80px;height:80px;border-radius:40px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.4);left:calc(50% - 40px);pointer-events:none}
+#steerPad .lab{position:absolute;top:50%;transform:translateY(-50%);font-size:20px;opacity:.55;pointer-events:none}
+#gas{right:calc(14px + var(--sar));bottom:calc(14px + var(--sab));width:96px;height:150px}
+#brk{right:calc(122px + var(--sar));bottom:calc(14px + var(--sab));width:96px;height:112px}
+#hbk{right:calc(122px + var(--sar));bottom:calc(136px + var(--sab));width:96px;height:46px;font-size:12px}
+#hornT{right:calc(14px + var(--sar));bottom:calc(172px + var(--sab));width:60px;height:46px;font-size:12px}
+
+#menu{position:fixed;inset:0;display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(4,6,9,.88),rgba(4,6,9,.55) 40%,rgba(4,6,9,.9));padding:calc(14px + var(--sat)) calc(14px + var(--sar)) calc(14px + var(--sab)) calc(14px + var(--sal));overflow:auto;touch-action:pan-y}
+#menu.hidden{display:none}
+#menu h1{margin:0;font-size:clamp(26px,5vw,46px);letter-spacing:.04em;font-weight:900;line-height:1}
+#menu h1 em{font-style:normal;color:var(--accent)}
+#menu .sub{color:var(--muted);margin:4px 0 12px}
+#menuGrid{display:grid;grid-template-columns:1.1fr 1fr;gap:12px;flex:1;min-height:0}
+@media (max-width:760px){#menuGrid{grid-template-columns:1fr}}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:12px 14px;backdrop-filter:blur(10px)}
+#carList{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.carBtn{text-align:left;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.05);line-height:1.25}
+.carBtn.sel{border-color:var(--accent);background:rgba(255,106,26,.16)}
+.carBtn small{display:block;color:var(--muted);font-size:11px}
+.bar{height:6px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden;margin:3px 0 8px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.row{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)}
+.row b{color:var(--text);font-variant-numeric:tabular-nums}
+#swatches{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}
+.sw{width:30px;height:30px;border-radius:50%;border:2px solid transparent;padding:0}
+.sw.sel{border-color:#fff}
+.seg{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px}
+.seg button{padding:6px 10px;font-size:12.5px}
+.seg button.sel{background:var(--accent);border-color:var(--accent);color:#1a0c00;font-weight:700}
+#go{background:var(--accent);border-color:var(--accent);color:#1a0c00;font-size:18px;font-weight:900;letter-spacing:.06em;padding:12px 22px;width:100%;margin-top:6px}
+label.t{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+#loading{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:5}
+#loading .spin{width:38px;height:38px;border-radius:50%;border:4px solid rgba(255,255,255,.15);border-top-color:var(--accent);animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;background:var(--bg);z-index:9}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="vignette"></div><div id="redflash"></div><div id="flash"></div>
+<div id="hud">
+  <div id="dmg"><h4>Damage</h4><div id="hpbar"><div id="hpfill"></div></div><div id="cost">$0</div><div id="lost"></div></div>
+  <div id="stats">
+    <div>0–100: <b id="s0100">–</b></div>
+    <div>0–200: <b id="s0200">–</b></div>
+    <div>Top speed: <b id="stop">0</b></div>
+    <div>Air time: <b id="sair">0.0 s</b></div>
+    <div>Drift: <b id="sdrift">0</b></div>
+  </div>
+  <div id="gaugeWrap"><canvas id="gauge" width="660" height="400"></canvas></div>
+  <div id="toast"></div>
+  <div id="topbtns">
+    <button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
+  </div>
+  <div id="hint"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive &nbsp; <kbd>Space</kbd> handbrake &nbsp; <kbd>C</kbd> camera<br><kbd>R</kbd> flip upright &nbsp; <kbd>E</kbd> repair &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>Esc</kbd> garage</div>
+</div>
+<div id="touch">
+  <div id="steerPad" class="ctl"><span class="lab" style="left:16px">◀</span><span class="lab" style="right:16px">▶</span><div id="steerKnob"></div></div>
+  <div id="brk" class="ctl">BRAKE</div>
+  <div id="gas" class="ctl">GAS</div>
+  <div id="hbk" class="ctl">HANDBRAKE</div>
+  <div id="hornT" class="ctl">HORN</div>
+</div>
+<div id="menu">
+  <h1>CRASH <em>YARD</em></h1>
+  <div class="sub">Real-physics driving &amp; destruction sandbox. Pick a car, then wreck everything.</div>
+  <div id="menuGrid">
+    <div class="card">
+      <label class="t">Garage</label>
+      <div id="carList"></div>
+      <div id="specs" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <label class="t">Paint</label><div id="swatches"></div>
+      <label class="t">Driver assists</label>
+      <div class="seg" id="segAssist"><button data-v="2">Casual</button><button data-v="1">Sport</button><button data-v="0">Pro (none)</button></div>
+      <label class="t">Time of day</label>
+      <div class="seg" id="segTod"><button data-v="day">Noon</button><button data-v="golden">Sunset</button><button data-v="overcast">Overcast</button><button data-v="night">Night</button></div>
+      <label class="t">Quality</label>
+      <div class="seg" id="segQ"><button data-v="0">Low</button><button data-v="1">Medium</button><button data-v="2">High</button></div>
+      <label class="t">Units</label>
+      <div class="seg" id="segU"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></div>
+      <label class="t">Steering</label>
+      <div class="seg" id="segTilt"><button data-v="0">Buttons / keys</button><button data-v="1">Tilt (phone/tablet)</button></div>
+      <button id="go">DRIVE</button>
+      <div class="sub" style="margin:8px 0 0;font-size:12px">Car names are fictional; engines, weights and performance are modelled on real-world supercar, luxury and muscle class figures.</div>
+    </div>
+  </div>
+</div>
+<div id="loading"><div class="spin"></div><div>Building cars &amp; yard…</div></div>
+<div id="err"><div><h2>WebGL 2 needed</h2><p>This game runs in the browser with WebGL 2. Try Chrome, Edge, Firefox or Safari 15+.</p></div></div>
+<script>/*BUNDLE*/</script>
+</body>
+</html>

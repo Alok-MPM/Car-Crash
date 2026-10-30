@@ -1,0 +1,66 @@
+// Real-world numbers for each car (hp, Nm, mass, top speed...). Fictional badges, real engineering targets.
+// geo: metres, z measured from the front bumper tip, y from the ground.
+export const CARS = [
+  {
+    id: 'tauro', name: 'Tauro SVJ', maker: 'Lamborghini-class', tag: 'Mid-engine V12 supercar',
+    engine: '6.5 L V12, naturally aspirated', price: 520000,
+    hp: 770, nm: 720, nmRpm: 6750, hpRpm: 8500, kg: 1625, vmax: 350, zero100: 2.8,
+    drive: 'AWD', frontShare: 0.3, redline: 8700, idle: 950, turbo: false, cyl: 12, Ie: 0.32,
+    curve: [[950, 230], [1500, 330], [2500, 430], [3500, 520], [4500, 600], [5500, 665], [6500, 715], [6750, 720], [7500, 705], [8000, 680], [8500, 640], [8700, 615]],
+    nGears: 7, vFirst: 74, shiftTime: 0.1, mu: 1.32, clA: 1.05, brakeG: 1.35, lsd: 90,
+    geo: { L: 4.94, W: 2.03, H: 1.14, zFA: 1.08, zRA: 3.78, trackF: 1.72, trackR: 1.7, RF: 0.33, RR: 0.355, twF: 0.255, twR: 0.345, cgY: 0.47, wR: 0.57, travel: 0.26, cs: 0.07, beltY: 0.84, cabZ: [1.8, 3.7], cabY: [0.84, 1.14], boxY0: 0.14 },
+    colors: ['#f2b100', '#c8102e', '#1d6fe0', '#e9ecef', '#14181c', '#2f8f4e', '#e46a1f', '#7b3fe4'],
+  },
+  {
+    id: 'spectre', name: 'Spectre GT Turbo S', maker: 'Porsche-class', tag: 'Rear-engine twin-turbo coupe',
+    engine: '3.8 L flat-six, twin-turbo', price: 235000,
+    hp: 640, nm: 800, nmRpm: 3000, hpRpm: 6750, kg: 1710, vmax: 330, zero100: 2.7,
+    drive: 'AWD', frontShare: 0.4, redline: 7200, idle: 850, turbo: true, cyl: 6, Ie: 0.26,
+    curve: [[850, 180], [1200, 300], [1600, 520], [2000, 720], [2500, 800], [4000, 800], [5000, 765], [6000, 725], [6750, 680], [7200, 640]],
+    nGears: 8, vFirst: 70, shiftTime: 0.1, mu: 1.28, clA: 0.55, brakeG: 1.3, lsd: 80,
+    geo: { L: 4.53, W: 1.9, H: 1.3, zFA: 0.9, zRA: 3.35, trackF: 1.65, trackR: 1.63, RF: 0.343, RR: 0.349, twF: 0.255, twR: 0.315, cgY: 0.5, wR: 0.62, travel: 0.27, cs: 0.075, beltY: 0.8, cabZ: [1.35, 4.0], cabY: [0.8, 1.3], boxY0: 0.14 },
+    colors: ['#cfd3d8', '#c8102e', '#0b3d91', '#f2b100', '#14181c', '#2f8f4e', '#e46a1f', '#7b3fe4'],
+  },
+  {
+    id: 'bolt', name: 'Bolt R Hellfire', maker: 'Dodge-class', tag: 'Supercharged V8 muscle coupe',
+    engine: '6.2 L V8, supercharged', price: 82000,
+    hp: 717, nm: 881, nmRpm: 4800, hpRpm: 6000, kg: 2060, vmax: 320, zero100: 3.7,
+    drive: 'RWD', frontShare: 0, redline: 6400, idle: 750, turbo: false, cyl: 8, Ie: 0.36,
+    curve: [[750, 380], [1500, 560], [2000, 640], [3000, 760], [4000, 850], [4800, 881], [5500, 860], [6000, 845], [6400, 780]],
+    nGears: 8, vFirst: 82, shiftTime: 0.14, mu: 1.3, clA: 0.1, brakeG: 1.1, lsd: 70,
+    geo: { L: 5.03, W: 1.97, H: 1.45, zFA: 0.98, zRA: 3.93, trackF: 1.6, trackR: 1.62, RF: 0.364, RR: 0.364, twF: 0.275, twR: 0.305, cgY: 0.56, wR: 0.45, travel: 0.28, cs: 0.09, beltY: 0.98, cabZ: [1.9, 4.2], cabY: [0.98, 1.45], boxY0: 0.15 },
+    colors: ['#7b3fe4', '#e46a1f', '#c8102e', '#14181c', '#e9ecef', '#1d6fe0', '#f2b100', '#2f8f4e'],
+  },
+  {
+    id: 'sovereign', name: 'Sovereign S63', maker: 'Mercedes-class', tag: 'Luxury twin-turbo saloon',
+    engine: '4.0 L V8, twin-turbo', price: 165000,
+    hp: 612, nm: 900, nmRpm: 3000, hpRpm: 5500, kg: 2180, vmax: 250, vNat: 305, zero100: 3.5,
+    drive: 'AWD', frontShare: 0.35, redline: 6500, idle: 700, turbo: true, cyl: 8, Ie: 0.3,
+    curve: [[700, 250], [1200, 420], [1800, 720], [2750, 900], [4500, 900], [5500, 790], [6000, 720], [6500, 640]],
+    nGears: 9, vFirst: 62, shiftTime: 0.16, mu: 1.08, clA: 0.15, brakeG: 1.1, lsd: 60,
+    geo: { L: 5.29, W: 1.95, H: 1.5, zFA: 1.0, zRA: 4.21, trackF: 1.67, trackR: 1.69, RF: 0.356, RR: 0.354, twF: 0.255, twR: 0.285, cgY: 0.56, wR: 0.47, travel: 0.3, cs: 0.1, beltY: 0.94, cabZ: [1.75, 4.45], cabY: [0.94, 1.5], boxY0: 0.15 },
+    colors: ['#14181c', '#cfd3d8', '#0b3d91', '#5b1b2b', '#e9ecef', '#2c3a2e', '#6c6f75', '#b08d57'],
+  },
+  {
+    id: 'titan', name: 'Titan X Super SUV', maker: 'Urus-class', tag: 'Twin-turbo performance SUV',
+    engine: '4.0 L V8, twin-turbo', price: 245000,
+    hp: 650, nm: 850, nmRpm: 3000, hpRpm: 6000, kg: 2290, vmax: 305, zero100: 3.6,
+    drive: 'AWD', frontShare: 0.4, redline: 6800, idle: 750, turbo: true, cyl: 8, Ie: 0.32,
+    curve: [[750, 230], [1200, 400], [1800, 720], [2250, 850], [4500, 850], [5500, 780], [6000, 770], [6500, 700], [6800, 650]],
+    nGears: 8, vFirst: 68, shiftTime: 0.14, mu: 1.12, clA: 0.2, brakeG: 1.1, lsd: 70,
+    geo: { L: 5.12, W: 2.02, H: 1.64, zFA: 1.0, zRA: 4.0, trackF: 1.72, trackR: 1.73, RF: 0.393, RR: 0.389, twF: 0.285, twR: 0.315, cgY: 0.7, wR: 0.46, travel: 0.34, cs: 0.11, beltY: 1.08, cabZ: [1.6, 5.0], cabY: [1.08, 1.64], boxY0: 0.2 },
+    colors: ['#e46a1f', '#14181c', '#e9ecef', '#2f8f4e', '#c8102e', '#1d6fe0', '#f2b100', '#6c6f75'],
+  },
+  {
+    id: 'stinger', name: 'Stinger LM Hypercar', maker: 'Bugatti-class', tag: 'Quad-turbo W16 hypercar',
+    engine: '8.0 L W16, quad-turbo', price: 3000000,
+    hp: 1479, nm: 1600, nmRpm: 4000, hpRpm: 6700, kg: 2070, vmax: 420, vNat: 470, zero100: 2.4,
+    drive: 'AWD', frontShare: 0.4, redline: 7000, idle: 800, turbo: true, cyl: 16, Ie: 0.5,
+    curve: [[800, 300], [1200, 500], [1500, 800], [2000, 1500], [2500, 1600], [6000, 1600], [6700, 1580], [7000, 1500]],
+    nGears: 7, vFirst: 96, shiftTime: 0.08, mu: 1.38, clA: 1.0, brakeG: 1.4, lsd: 100,
+    geo: { L: 4.54, W: 2.04, H: 1.21, zFA: 0.9, zRA: 3.61, trackF: 1.74, trackR: 1.7, RF: 0.34, RR: 0.355, twF: 0.285, twR: 0.355, cgY: 0.52, wR: 0.56, travel: 0.26, cs: 0.07, beltY: 0.85, cabZ: [1.5, 3.7], cabY: [0.85, 1.21], boxY0: 0.14 },
+    colors: ['#1d6fe0', '#14181c', '#c8102e', '#e9ecef', '#f2b100', '#2f8f4e', '#7b3fe4', '#e46a1f'],
+  },
+];
+
+export const getCar = (id) => CARS.find((c) => c.id === id) || CARS[0];
