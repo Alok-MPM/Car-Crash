@@ -123,7 +123,7 @@ function blast(pos, R = 11, power = 10) {
       if (cr && d < R * 0.75) {
         const e = { p: o.pos.slice(), n: [dx / d, dy / d, dz / d], speed: 8 * (1 - d / R) + 2 };
         cr.impact(e, { fixed: false, mass: 400, group: GROUP.PROP }, true);
-        if (d < 4 && cr.fire === 0) cr.fire = 0.01;
+        if (d < 2.5 && cr.fire === 0 && Math.random() < 0.35) { cr.fire = 0.01; cr.leak = false; }
       }
     }
   }
@@ -138,6 +138,7 @@ let lastBlast = null;
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 world.onImpact = (e) => {
+  scene.structures.onImpact(e);
   const ca = e.a.userData && e.a.userData.car, cb = e.b.userData && e.b.userData.car;
   if (ca) ca.impact(e, e.b, true);
   if (cb) cb.impact(e, e.a, false);
@@ -154,6 +155,7 @@ world.onImpact = (e) => {
   }
 };
 let scrape = 0;
+let propDmg = 0;
 world.onScrape = (body, c) => { if (body.userData && body.userData.car === player) scrape = Math.max(scrape, clamp(c.vt0 / 15, 0, 1)); };
 
 // ---------- input ----------
@@ -362,7 +364,10 @@ function repair() {
   const yaw = Math.atan2(-fwd[0], -fwd[2]);
   const pos = [b.pos[0], 0, b.pos[2]];
   const spec = player.spec;
+  const old = player; old.dead = true; old.fire = -1; old.exploded = true;
+  for (let i = ctx.debris.length - 1; i >= 0; i--) if (ctx.debris[i].car === old) ctx.debris[i].t = 999;
   cars.splice(cars.indexOf(player), 1); player.dispose();
+  if (fx.clearNear) fx.clearNear(pos, 14);
   const c = new Car(ctx, spec, { color: spec.colors[S.color % spec.colors.length], pos: [pos[0], spec.geo.cgY + 0.2, pos[2]], q: yawQuat(yaw), assist: S.assist });
   c.vehicle.reset(pos, yaw);
   cars.unshift(c); player = c;
@@ -506,8 +511,7 @@ function updateHud(dt) {
   fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS';
   $('hpfill').style.width = (hp * 100).toFixed(0) + '%';
   $('hpfill').style.background = hp > 0.6 ? 'linear-gradient(90deg,#37d67a,#c8e84a)' : hp > 0.3 ? 'linear-gradient(90deg,#ffb02e,#ffd24a)' : 'linear-gradient(90deg,#ff3b30,#ff7a30)';
-  let total = 0; for (const c of cars) total += c.cost;
-  $('cost').textContent = '$' + Math.round(total).toLocaleString();
+  $('cost').innerHTML = '$' + Math.round(player.cost).toLocaleString() + (propDmg > 500 ? '<small style="display:block;font-size:12px;font-weight:600;color:var(--muted)">property $' + Math.round(propDmg).toLocaleString() + '</small>' : '');
   const lost = [];
   const names = ['', 'Hood', 'Trunk', 'Front bumper', 'Rear bumper', 'Left door', 'Right door', 'L mirror', 'R mirror', 'Wing'];
   player.partGone.forEach((g, i) => { if (g) lost.push(names[i]); });
@@ -621,10 +625,28 @@ function frame(t) {
       if (w.flat && v.speed > 4) fx.spark(w.contact, [(Math.random() - 0.5) * 3, 1 + Math.random(), (Math.random() - 0.5) * 3]);
     });
   }
+  // road damage: body scraping on asphalt throws sparks and carves a gouge; hard landings leave a dent
+  for (const c of cars) {
+    const b = c.body, sp = Math.hypot(b.v[0], b.v[2]);
+    if (b.gcT !== undefined && world.time - b.gcT < 0.05) {
+      if (sp > 3.5) {
+        const fw = [b.v[0], 0, b.v[2]];
+        const k = Math.min(1, sp / 18);
+        for (let i = 0; i < 2; i++) if (Math.random() < k) fx.spark([b.gcX, 0.05, b.gcZ], [-b.v[0] * 0.2 + (Math.random() - 0.5) * 4, 1.5 + Math.random() * 3, -b.v[2] * 0.2 + (Math.random() - 0.5) * 4]);
+        fx.gouge(c.id + '' + b.id, b.gcX, b.gcZ, fw, 0.16, 0.5 * k + 0.2);
+      }
+      if (b.gcV > 4.5 && !c.npc || b.gcV > 7) {
+        const sz = clamp(b.gcV / 10, 0.4, 1.6);
+        fx.crater(b.gcX, b.gcZ, sz, 0.7);
+        for (let i = 0; i < 10; i++) fx.dust([b.gcX, 0.1, b.gcZ], [(Math.random() - 0.5) * 4, 1 + Math.random() * 2, (Math.random() - 0.5) * 4], 0.7);
+      }
+      b.gcV = 0;
+    } else { if (b.gcT !== undefined) fx.gouge(c.id + '' + b.id, 0, 0, [0, 0, 1], 0.1, 0); b.gcV = 0; }
+  }
   trackStats(sdt);
   // debris housekeeping
   const deb = ctx.debris;
-  for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if (d.t > 45 || d.body.pos[1] < -30 || deb.length > 70 && i < deb.length - 70) { world.remove(d.body); deb.splice(i, 1); } }
+  for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if (d.t > 45 || d.body.pos[1] < -30 || deb.length > 230 && i < deb.length - 230) { world.remove(d.body); deb.splice(i, 1); } }
   // camera
   updateCamera(dt);
   // audio
@@ -658,12 +680,14 @@ function frame(t) {
 async function boot() {
   applyQuality();
   r.setTOD(S.tod);
+  ctx.onProp = (v) => { propDmg += v; };
   scene = new Scene(ctx, { density: S.quality === 0 ? 0.6 : 1 });
+  world.preHit = (a, b, c) => scene.structures.preHit(a, b, c);
   makePlayer(false);
   populateNPCs();
   syncMenu();
   $('loading').style.display = 'none';
   requestAnimationFrame((t) => { last = t / 1000; frame(t); });
-  window.__game = { get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
+  window.__game = { orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
 }
 setTimeout(() => { boot().catch((e) => { console.error(e); $('loading').innerHTML = '<div style="padding:24px;text-align:center">Failed to start: ' + String(e.message || e).slice(0, 300) + '</div>'; }); }, 30);

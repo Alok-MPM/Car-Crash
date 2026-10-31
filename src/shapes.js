@@ -44,7 +44,7 @@ export const SHAPES = {
     mirror: { z: 1.7, y: 0.95, x: 0.93 },
     seat: { z: 2.2, y: 0.5 }, plate: { f: true, r: true },
     exhaust: { n: 2, z: 4.53, y: 0.4, x: [-0.3, 0.3] },
-    wheelStyle: 'multi',
+    wheelStyle: 'fuchs',
   },
   bolt: {
     hw: [[0, 0.72], [0.1, 0.86], [0.3, 0.93], [0.9, 0.97], [2.0, 0.985], [3.5, 0.985], [4.4, 0.97], [4.85, 0.92], [5.03, 0.8]],
@@ -104,7 +104,7 @@ export const SHAPES = {
     mirror: { z: 1.95, y: 1.2, x: 1.02 },
     seat: { z: 3.0, y: 0.7 }, plate: { f: true, r: true },
     exhaust: { n: 4, z: 5.12, y: 0.4, x: [-0.65, -0.45, 0.45, 0.65] },
-    wheelStyle: '5dbl',
+    wheelStyle: 'ysp',
   },
   stinger: {
     hw: [[0, 0.7], [0.1, 0.82], [0.3, 0.92], [0.7, 1.0], [1.4, 1.02], [2.3, 1.0], [3.0, 1.02], [3.5, 1.03], [4.1, 1.0], [4.4, 0.9], [4.54, 0.76]],
@@ -124,6 +124,6 @@ export const SHAPES = {
     mirror: { z: 1.9, y: 0.92, x: 1.0 },
     seat: { z: 2.45, y: 0.5 }, plate: { f: false, r: true },
     exhaust: { n: 1, z: 4.54, y: 0.4, x: [0] },
-    wheelStyle: 'turbine',
+    wheelStyle: 'aero',
   },
 };

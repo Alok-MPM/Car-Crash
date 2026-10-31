@@ -42,6 +42,7 @@ export class FX {
   glass(p, v) {
     this.add({ m: 3, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.02 + Math.random() * 0.04, g: 0, life: 6 + Math.random() * 6, t: 0, c: [0.7, 0.85, 0.9], a: 1, drag: 0.05, up: -9.8, seed: Math.random(), rot: Math.random() * 6, rv: (Math.random() - 0.5) * 10, bounce: 0.25, solid: true });
   }
+  clearNear(p, R) { this.ps = this.ps.filter((q) => Math.hypot(q.p[0] - p[0], q.p[2] - p[2]) > R); }
   explosion(p) {
     this.flash = 1;
     for (let i = 0; i < 70; i++) { const a = Math.random() * 6.28, e = Math.random() * 3.14 - 0.5, sp = 2 + Math.random() * 9; this.fire([p[0], p[1] + 0.5, p[2]], [Math.cos(a) * Math.cos(e) * sp, Math.sin(e) * sp + 3, Math.sin(a) * Math.cos(e) * sp], 1.2 + Math.random() * 1.6); }
@@ -122,6 +123,18 @@ export class FX {
     put(A0[0], A0[1], A0[2], 0, sv, al); put(B1[0], B1[1], B1[2], 1, sv + 0.02, al); put(B0[0], B0[1], B0[2], 0, sv + 0.02, al);
     this.skidN++;
     if (this.skidN >= SKID_CAP) { this.skidN = 0; this.skidFull = true; }
+  }
+
+  // ---- road damage: gouge strokes and craters (reuse the skid ribbon buffer, darker/wider)
+  gouge(key, x, z, fwd, width, alpha) { this.skid('g' + key, [x, 0, z], fwd, width, alpha); }
+  crater(x, z, r, alpha) {
+    for (let i = 0; i < 5; i++) {
+      const a = Math.random() * 3.14, c = Math.cos(a), s = Math.sin(a), rr = r * (0.6 + Math.random() * 0.6);
+      const k = 'c' + this.skidN + i;
+      this.skid(k, [x - c * rr * 0.5, 0, z - s * rr * 0.5], [c, 0, s], rr * 0.5, alpha);
+      this.skid(k, [x + c * rr * 0.5, 0, z + s * rr * 0.5], [c, 0, s], rr * 0.5, alpha);
+      this.last.delete(k);
+    }
   }
 
   // ---- contact blobs

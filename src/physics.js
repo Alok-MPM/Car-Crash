@@ -412,6 +412,8 @@ export class World {
     this.iters = 12;
     this.onImpact = null;
     this.onScrape = null;
+    this.preHit = null;
+    this.staticDirty = true;
     this.cell = 7;
     this.statics = [];
     this.time = 0;
@@ -419,11 +421,13 @@ export class World {
   add(b) {
     b.finalize();
     this.bodies.push(b);
+    if (b.fixed) this.staticDirty = true;
     if (b.fixed && b.raycast) this.statics.push(b);
     return b;
   }
   remove(b) {
     b.removed = true;
+    if (b.fixed) this.staticDirty = true;
     const i = this.bodies.indexOf(b);
     if (i >= 0) this.bodies.splice(i, 1);
     const j = this.statics.indexOf(b);
@@ -491,9 +495,44 @@ export class World {
     this.finish(dt);
   }
 
+  buildStaticGrid() {
+    const cs = this.cell, g = new Map();
+    for (const b of this.bodies) {
+      if (!b.fixed || b.removed) continue;
+      const A = b.aabb;
+      b._cx0 = Math.floor(A[0] / cs); b._cx1 = Math.floor(A[3] / cs);
+      b._cz0 = Math.floor(A[2] / cs); b._cz1 = Math.floor(A[5] / cs);
+      if ((b._cx1 - b._cx0 + 1) * (b._cz1 - b._cz0 + 1) > 400) continue;
+      for (let cx = b._cx0; cx <= b._cx1; cx++)
+        for (let cz = b._cz0; cz <= b._cz1; cz++) {
+          const key = cx * 8192 + cz;
+          let l = g.get(key);
+          if (!l) { l = []; g.set(key, l); }
+          l.push(b);
+        }
+    }
+    this.sgrid = g;
+    this.staticDirty = false;
+  }
+
+  // turn a fixed body into a free dynamic one (breaking walls, collapsing storeys)
+  release(b, mass) {
+    if (!b.fixed) return;
+    b.mass = mass || b.mass || 100;
+    b.fixed = false;
+    b.invMass = 1 / b.mass;
+    b.im = b.invMass;
+    b.finalize();
+    b.sleeping = false;
+    b.sleepT = 0;
+    this.staticDirty = true;
+  }
+
   collide() {
     this.nc = 0;
     const cs = this.cell, bodies = this.bodies;
+    if (this.staticDirty || !this.sgrid) this.buildStaticGrid();
+    const sgrid = this.sgrid;
     const grid = new Map();
     const cellRange = (b) => {
       const A = b.aabb;
@@ -501,12 +540,14 @@ export class World {
       b._cz0 = Math.floor(A[2] / cs); b._cz1 = Math.floor(A[5] / cs);
     };
     const tmp = [];
+    const dyn = [];
     for (const b of bodies) {
-      if (b.removed) continue;
-      if (!b.fixed && !b.sleeping) b.refresh();
+      if (b.removed || b.fixed) continue;
+      if (!b.sleeping) b.refresh();
       cellRange(b);
       const span = (b._cx1 - b._cx0 + 1) * (b._cz1 - b._cz0 + 1);
       if (span > 400) continue; // absurdly large
+      dyn.push(b);
       for (let cx = b._cx0; cx <= b._cx1; cx++)
         for (let cz = b._cz0; cz <= b._cz1; cz++) {
           const key = cx * 8192 + cz;
@@ -522,10 +563,9 @@ export class World {
       const cx = (key - cz) / 8192;
       for (let i = 0; i < list.length; i++) {
         const a = list[i];
-        const aInactive = a.fixed || a.sleeping;
         for (let j = i + 1; j < list.length; j++) {
           const b = list[j];
-          if (aInactive && (b.fixed || b.sleeping)) continue;
+          if (a.sleeping && b.sleeping) continue;
           if (!(a.mask & b.group) || !(b.mask & a.group)) continue;
           if (cx !== Math.max(a._cx0, b._cx0) || cz !== Math.max(a._cz0, b._cz0)) continue;
           const A = a.aabb, B = b.aabb;
@@ -534,6 +574,28 @@ export class World {
           this.narrow(a, b, tmp);
         }
       }
+    }
+    // dynamic vs static (static grid is cached; only awake bodies query it)
+    const qid = (this.qid = (this.qid || 0) + 1 + 0.0);
+    let q = 0;
+    for (const d of dyn) {
+      if (d.sleeping) continue;
+      q++;
+      const stamp = qid * 100000 + q;
+      for (let cx = d._cx0; cx <= d._cx1; cx++)
+        for (let cz = d._cz0; cz <= d._cz1; cz++) {
+          const l = sgrid.get(cx * 8192 + cz);
+          if (!l) continue;
+          for (const s of l) {
+            if (s._st === stamp || s.removed) continue;
+            s._st = stamp;
+            if (!(d.mask & s.group) || !(s.mask & d.group)) continue;
+            const A = d.aabb, B = s.aabb;
+            if (A[3] < B[0] || B[3] < A[0] || A[4] < B[1] || B[4] < A[1] || A[5] < B[2] || B[5] < A[2]) continue;
+            this.pairs++;
+            this.narrow(d, s, tmp);
+          }
+        }
     }
     // ground
     if (this.groundOn)
@@ -557,6 +619,7 @@ export class World {
                   ct.n[0] = 0; ct.n[1] = 1; ct.n[2] = 0;
                   ct.p[0] = x; ct.p[1] = y * 0.5; ct.p[2] = z;
                   ct.depth = -y;
+                  b.gcT = this.time; b.gcX = x; b.gcZ = z; b.gcV = Math.max(b.gcV || 0, -b.v[1]);
                 }
               }
         }
@@ -612,14 +675,22 @@ export class World {
       tx /= l; ty /= l; tz /= l;
       c.t1[0] = tx; c.t1[1] = ty; c.t1[2] = tz;
       c.t2[0] = n[1] * tz - n[2] * ty; c.t2[1] = n[2] * tx - n[0] * tz; c.t2[2] = n[0] * ty - n[1] * tx;
+      a.velAt(c.p[0], c.p[1], c.p[2], vA);
+      b.velAt(c.p[0], c.p[1], c.p[2], vB);
+      let rx = vB[0] - vA[0], ry = vB[1] - vA[1], rz = vB[2] - vA[2];
+      c.vn0 = rx * n[0] + ry * n[1] + rz * n[2];
+      c.vt0 = Math.hypot(rx - c.vn0 * n[0], ry - c.vn0 * n[1], rz - c.vn0 * n[2]);
+      // breakable fixed bodies may give way before the impulse is solved
+      if (this.preHit && c.vn0 < -2 && (a.brk || b.brk)) {
+        this.preHit(a, b, c);
+        a.velAt(c.p[0], c.p[1], c.p[2], vA);
+        b.velAt(c.p[0], c.p[1], c.p[2], vB);
+        rx = vB[0] - vA[0]; ry = vB[1] - vA[1]; rz = vB[2] - vA[2];
+        c.vn0 = rx * n[0] + ry * n[1] + rz * n[2];
+      }
       c.mn = this.effMass(a, b, c.ra, c.rb, n);
       c.mt1 = this.effMass(a, b, c.ra, c.rb, c.t1);
       c.mt2 = this.effMass(a, b, c.ra, c.rb, c.t2);
-      a.velAt(c.p[0], c.p[1], c.p[2], vA);
-      b.velAt(c.p[0], c.p[1], c.p[2], vB);
-      const rx = vB[0] - vA[0], ry = vB[1] - vA[1], rz = vB[2] - vA[2];
-      c.vn0 = rx * n[0] + ry * n[1] + rz * n[2];
-      c.vt0 = Math.hypot(rx - c.vn0 * n[0], ry - c.vn0 * n[1], rz - c.vn0 * n[2]);
       c.fric = Math.sqrt(a.fric * b.fric);
       const pen = Math.max(c.depth - 0.004, 0);
       let bias = Math.min((0.22 / dt) * pen, 3.0);

@@ -133,6 +133,13 @@ export class Car {
     const mu = (m1 * m2) / (m1 + m2);
     const v = e.speed;
     if (v < 1.5) return;
+    // rate limit repeated contact with the same thing (piles of debris resting on the car)
+    const ot = this.hitT || (this.hitT = new Map());
+    const nowT = this.ctx.time;
+    const lastT = ot.get(other.id) || -9;
+    if (nowT - lastT < 0.35 && v < 8) return;
+    ot.set(other.id, nowT);
+    if (ot.size > 40) for (const [k, t] of ot) if (nowT - t > 2) ot.delete(k);
     const E = 0.5 * mu * v * v; // joules
     const ek = E / 154000;
     let depth = 0.35 * Math.pow(ek, 0.62);
@@ -156,7 +163,7 @@ export class Car {
     const radius = 0.5 + depth * 0.7;
     this.deformAt(pl, dir, depth, radius);
     this.deform += depth * (other.group === GROUP.CAR ? 0.9 : 1);
-    this.cost += this.spec.price * 0.35 * Math.pow(depth, 1.3) * 0.9;
+    this.cost = Math.min(this.spec.price * 1.0, this.cost + this.spec.price * 0.3 * Math.pow(depth, 1.4));
     this.lastHit = now;
     this.ctx.onDamage && this.ctx.onDamage(this, depth, E, e.p);
     // mechanical damage
@@ -353,7 +360,8 @@ export class Car {
 
   wreck() {
     this.wrecked = true;
-    this.fire = 0.01;
+    // most wrecks only smoke; a fuel leak that ignites is the exception
+    if (this.rng() < 0.3) { this.fire = 0.01; this.leak = this.rng() < 0.4; }
   }
 
   // ---------- per frame ----------
@@ -381,10 +389,11 @@ export class Car {
       if (this.fire > 0) {
         this.fire += dt;
         this.burnt = clamp(this.fire / 25, 0, 1);
+        if (this.fire > 16 && !this.leak) { this.fire = -1; }
         for (let i = 0; i < 2; i++) fx.fire(b.toWorld([(Math.random() - 0.5) * 1.0, 0.35, -this.spec.geo.L * 0.3 + (Math.random() - 0.5) * 0.8]), [(Math.random() - 0.5) * 0.8, 1.5 + Math.random() * 1.5, (Math.random() - 0.5) * 0.8], 0.4 + Math.random() * 0.4);
         if (Math.random() < 0.25) fx.smoke(b.toWorld([0, 0.7, -0.6]), [0, 2.2, 0], 0.9 + Math.random(), 2.5, [0.04, 0.04, 0.04], 0.75);
         this.ctx.r.addLight && this.ctx.r.addLight(hoodP[0], hoodP[1] + 0.5, hoodP[2], 9, 1.6, 0.6, 0.2);
-        if (this.fire > 9 && !this.exploded && this.ctx.explosions) this.explode();
+        if (this.fire > 11 && this.leak && !this.exploded && this.ctx.explosions) this.explode();
       }
     }
     if (this.burnt > 0) {
@@ -441,7 +450,7 @@ export class Car {
       // compute step by step with small matrices
       const rx = [1, 0, 0, 0, csp, ssp, 0, -ssp, csp];
       const fl = w.side > 0 ? [1, 0, 0, 0, 1, 0, 0, 0, 1] : [-1, 0, 0, 0, 1, 0, 0, 0, -1];
-      const st = [cs, 0, -sn, 0, 1, 0, sn, 0, cs];
+      const st = [cs, 0, sn, 0, 1, 0, -sn, 0, cs];
       const mm3 = (a, c) => { const o = new Array(9); for (let col = 0; col < 3; col++) for (let row = 0; row < 3; row++) o[col * 3 + row] = a[row] * c[col * 3] + a[3 + row] * c[col * 3 + 1] + a[6 + row] * c[col * 3 + 2]; return o; };
       const R3 = mm3(st, mm3(fl, rx));
       const lc = this.wheelLocal(w);
@@ -478,6 +487,9 @@ export function drawDebris(ctx, d) {
     const O = d._o || (d._o = new Float32Array(16));
     m4.mul(O, M, T);
     r.add(d.mesh, O, { only: d.part });
+  } else if (d.kind === 'rubble') {
+    m4.fromTRS(M, b.pos, b.q, d.s);
+    r.add(d.mesh, M, { cast: false });
   } else if (d.kind === 'wheel') {
     const wm = d.car.wheelMesh[d.front ? 0 : 1];
     const fl = d.side > 0 ? 1 : -1;
@@ -493,7 +505,7 @@ function getWheelMeshes(r, spec, ctx) {
   r._wm = r._wm || {};
   if (r._wm[spec.id]) return r._wm[spec.id];
   const g = spec.geo;
-  const style = ({ turbine: 'turbine', multi: 'multi', '5dbl': '5dbl' })[ctx.wheelStyle(spec)] || 'multi';
+  const style = ctx.wheelStyle(spec) || 'multi';
   const out = [];
   for (const [R, tw] of [[g.RF, g.twF], [g.RR, g.twR]]) {
     const w = buildWheel(R, tw, style);

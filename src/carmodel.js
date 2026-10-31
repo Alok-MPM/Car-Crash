@@ -207,6 +207,9 @@ export const MATS = {
   rimDark: { kind: 0, base: [0.05, 0.05, 0.055], metal: 0.9, rough: 0.3 },
   disc: { kind: 0, base: [0.38, 0.38, 0.4], metal: 0.9, rough: 0.42 },
   caliper: { kind: 0, base: [0.75, 0.04, 0.03], rough: 0.35, metal: 0.2 },
+  engine: { kind: 0, base: [0.09, 0.09, 0.1], metal: 0.85, rough: 0.38 },
+  alu: { kind: 0, base: [0.6, 0.6, 0.62], metal: 1, rough: 0.35 },
+  cover: { kind: 0, base: [0.45, 0.02, 0.02], metal: 0.4, rough: 0.35 },
   plate: { kind: 6, base: [1, 1, 1], rough: 0.5 },
 };
 export const MAT_ORDER = Object.keys(MATS);
@@ -427,17 +430,57 @@ export function buildWheel(R, tw, style) {
   b.addGeo(hub, 'chrome', 0, toAxis);
   // spokes
   const sx = half * 0.62;
-  const spoke = (ang, w, th, r0, r1, skew = 0) => {
+  const rimS = (ang, w, th, r0, r1, skew = 0, mat = 'rim', dx = 0) => {
     const len = r1 - r0;
     const geo = rbox(th, len / 2, w / 2, Math.min(th, w / 2) * 0.6, 1);
-    // place along +Y local then rotate around X
-    const place = M.mmul(tr(sx, 0, 0), M.mmul(rotX(ang), tr(0, (r0 + r1) / 2, 0)));
-    const m2 = skew ? M.mmul(place, rotY(skew)) : place;
-    b.addGeo(geo, 'rim', 0, m2);
+    const place = M.mmul(tr(sx + dx, 0, 0), M.mmul(rotX(ang), tr(0, (r0 + r1) / 2, 0)));
+    b.addGeo(geo, mat, 0, skew ? M.mmul(place, rotY(skew)) : place);
   };
-  if (style === 'multi') for (let i = 0; i < 10; i++) spoke((i / 10) * Math.PI * 2, rr * 0.13, 0.012, rr * 0.2, rr * 0.96);
-  else if (style === '5dbl') for (let i = 0; i < 5; i++) for (const o of [-0.1, 0.1]) spoke((i / 5) * Math.PI * 2 + o, rr * 0.12, 0.014, rr * 0.2, rr * 0.96);
-  else for (let i = 0; i < 14; i++) spoke((i / 14) * Math.PI * 2, rr * 0.11, 0.01, rr * 0.2, rr * 0.96, 0.35);
+  if (style === 'multi') {
+    // 10 slim spokes + inner ring (mesh-style luxury wheel)
+    for (let i = 0; i < 10; i++) { rimS((i / 10) * Math.PI * 2, rr * 0.1, 0.012, rr * 0.2, rr * 0.96); }
+    for (let i = 0; i < 10; i++) rimS((i / 10 + 0.05) * Math.PI * 2, rr * 0.05, 0.008, rr * 0.5, rr * 0.96, 0.7, 'rimDark', -0.004);
+    b.addGeo(torus(rr * 0.6, 0.008, 36, 6), 'rim', 0, M.mmul(tr(sx, 0, 0), rotZ(Math.PI / 2)));
+  } else if (style === '5dbl') {
+    for (let i = 0; i < 5; i++) for (const o of [-0.1, 0.1]) rimS((i / 5) * Math.PI * 2 + o, rr * 0.12, 0.014, rr * 0.2, rr * 0.96);
+  } else if (style === 'fuchs') {
+    // five broad tapered spokes with dark pockets between them
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      rimS(a, rr * 0.3, 0.016, rr * 0.2, rr * 0.5, 0);
+      rimS(a, rr * 0.2, 0.016, rr * 0.5, rr * 0.96, 0);
+      rimS(a + Math.PI / 5, rr * 0.5, 0.004, rr * 0.45, rr * 0.9, 0, 'rimDark', -0.03);
+    }
+    b.addGeo(torus(rr * 0.94, 0.01, 40, 6), 'chrome', 0, M.mmul(tr(half * 0.84, 0, 0), rotZ(Math.PI / 2)));
+  } else if (style === 'ysp') {
+    // Y-spokes: stem splits into a fork near the rim
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      rimS(a, rr * 0.16, 0.016, rr * 0.2, rr * 0.62);
+      for (const o of [-1, 1]) rimS(a + o * 0.2, rr * 0.12, 0.014, rr * 0.55, rr * 0.96, o * 0.32);
+    }
+  } else if (style === 'aero') {
+    // closed aero dish with five slot vents
+    b.addGeo(lathe([[0.001, half * 0.55], [rr * 0.95, half * 0.52], [rr * 0.95, half * 0.2]], 36), 'rim', 0, M.mmul(tr(0, 0, 0), toAxis));
+    for (let i = 0; i < 5; i++) rimS((i / 5) * Math.PI * 2, rr * 0.18, 0.004, rr * 0.35, rr * 0.85, 0, 'rimDark', half * 0.0 + 0.005);
+    for (let i = 0; i < 5; i++) rimS((i / 5) * Math.PI * 2 + Math.PI / 5, rr * 0.05, 0.016, rr * 0.2, rr * 0.96);
+  } else {
+    // turbine: 14 skewed blades + centre-lock nut
+    for (let i = 0; i < 14; i++) rimS((i / 14) * Math.PI * 2, rr * 0.11, 0.01, rr * 0.2, rr * 0.96, 0.35);
+    b.addGeo(cylinder(rr * 0.13, rr * 0.13, 0.03, 6), 'chrome', 0, M.mmul(tr(half * 0.78, 0, 0), rotZ(-Math.PI / 2)));
+  }
+  // lip bolts (visible fasteners on the outer lip)
+  if (style !== 'aero') for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    b.addGeo(cylinder(0.008, 0.008, 0.012, 6), 'chrome', 0, M.mmul(rotX(a), M.mmul(tr(half * 0.9, rr * 0.99, 0), rotZ(-Math.PI / 2))));
+  }
+  // valve stem
+  b.addGeo(cylinder(0.005, 0.005, 0.03, 6), 'chrome', 0, M.mmul(rotX(1.1), M.mmul(tr(half * 0.5, rr * 0.9, 0), rotZ(-Math.PI / 2))));
+  // cross-drilled holes on the disc
+  for (let i = 0; i < 18; i++) {
+    const a = (i / 18) * Math.PI * 2;
+    b.addGeo(cylinder(0.008, 0.008, 0.034, 6), 'rimDark', 0, M.mmul(rotX(a), M.mmul(tr(half * 0.12, rr * 0.74, 0), rotZ(-Math.PI / 2))));
+  }
   // brake disc (inboard of spokes) with a hat
   const disc = cylinder(rr * 0.88, rr * 0.88, 0.032, 36);
   b.addGeo(disc, 'disc', 0, M.mmul(tr(half * 0.12, 0, 0), rotZ(-Math.PI / 2)));
@@ -597,20 +640,133 @@ export function addDetails(out, spec, B, bNrm, G) {
   };
   if (S.plate.f) plate(true);
   if (S.plate.r) plate(false);
-  // ---- interior
+  // ---- floor pan + underbody (so the car is solid when panels come off / when flipped)
+  for (let z = 0.45; z < L - 0.4; z += 0.4) {
+    const w = W(z) * 0.86;
+    add(rbox(w, 0.012, 0.21, 0.006, 1), 'under', 0, tr(0, bot(z) + 0.075, z));
+  }
+  // ---- cabin
+  const gh = S.gh, gz0 = gh.R[0][0], gz1 = gh.R[gh.R.length - 1][0];
   const sz = S.seat.z, sy = S.seat.y;
   const cabY0 = sy + 0.28;
-  add(rbox(W(sz) * 0.8, 0.01, (S.gh.R[S.gh.R.length - 1][0] - S.gh.R[0][0]) / 2 * 0.9, 0.005, 1), 'interior', 0, tr(0, sy - 0.3, (S.gh.R[0][0] + S.gh.R[S.gh.R.length - 1][0]) / 2));
+  const big = ['sovereign', 'titan', 'spectre'].includes(spec.id);
+  const floorY = sy - 0.3;
+  add(rbox(W(sz) * 0.8, 0.01, (gz1 - gz0) / 2 * 0.9, 0.005, 1), 'interior', 0, tr(0, floorY, (gz0 + gz1) / 2));
+  // door cards + side sills
   both((sd) => {
-    const seat = tr(sd * 0.36, cabY0 - 0.22, sz + 0.1);
-    add(rbox(0.22, 0.05, 0.25, 0.03, 2), 'seat', 0, seat);
-    add(rbox(0.21, 0.28, 0.05, 0.03, 2), 'seat', 0, mmul(seat, mmul(tr(0, 0.28, 0.24), rotX(-0.2))));
-    add(rbox(0.07, 0.1, 0.04, 0.02, 1), 'seat', 0, mmul(seat, tr(0, 0.5, 0.31)));
+    const dzc = (S.door[0] + S.door[1]) / 2, dl = (S.door[1] - S.door[0]) / 2;
+    add(rbox(0.025, 0.22, dl * 0.9, 0.012, 1), 'interior', 0, tr(sd * W(dzc) * 0.74, sy + 0.12, dzc));
+    add(rbox(0.04, 0.025, dl * 0.85, 0.01, 1), 'trim', 0, tr(sd * W(dzc) * 0.72, sy + 0.34, dzc));
+    add(rbox(0.03, 0.035, dl * 0.8, 0.012, 1), 'carbon', 0, tr(sd * W(dzc) * 0.7, floorY + 0.03, dzc));
   });
-  const dz = S.gh.R[0][0] + 0.25;
-  add(rbox(W(dz) * 0.75, 0.09, 0.2, 0.04, 2), 'interior', 0, tr(0, cabY0 - 0.12, dz));
-  add(torus(0.17, 0.016, 24, 8), 'trim', 0, mmul(tr(-0.36, cabY0 + 0.0, dz + 0.22), rotX(1.1)));
-  add(rbox(0.07, 0.12, 0.28, 0.03, 1), 'interior', 0, tr(0, cabY0 - 0.2, sz + 0.1));
+  // seats: base, backrest with side bolsters, headrest
+  const seatAt = (x, z) => {
+    const m = tr(x, cabY0 - 0.22, z);
+    add(rbox(0.21, 0.05, 0.25, 0.03, 2), 'seat', 0, m);
+    add(rbox(0.04, 0.07, 0.24, 0.02, 1), 'seat', 0, mmul(m, tr(-0.18, 0.06, 0)));
+    add(rbox(0.04, 0.07, 0.24, 0.02, 1), 'seat', 0, mmul(m, tr(0.18, 0.06, 0)));
+    const back = mmul(m, mmul(tr(0, 0.28, 0.24), rotX(-0.2)));
+    add(rbox(0.2, 0.28, 0.045, 0.03, 2), 'seat', 0, back);
+    add(rbox(0.04, 0.26, 0.06, 0.02, 1), 'seat', 0, mmul(back, tr(-0.2, 0, -0.03)));
+    add(rbox(0.04, 0.26, 0.06, 0.02, 1), 'seat', 0, mmul(back, tr(0.2, 0, -0.03)));
+    add(rbox(0.09, 0.1, 0.04, 0.02, 1), 'seat', 0, mmul(m, tr(0, 0.62, 0.31)));
+    add(rbox(0.012, 0.06, 0.012, 0.005, 1), 'chrome', 0, mmul(m, tr(-0.05, 0.5, 0.29)));
+    add(rbox(0.012, 0.06, 0.012, 0.005, 1), 'chrome', 0, mmul(m, tr(0.05, 0.5, 0.29)));
+  };
+  both((sd) => seatAt(sd * 0.36, sz + 0.1));
+  if (big) both((sd) => seatAt(sd * 0.36, Math.min(gz1 - 0.35, sz + 0.95)));
+  // dashboard: upper pad, instrument hood, centre stack, vents, screen
+  const dz = gz0 + 0.25;
+  const dW = W(dz) * 0.78;
+  add(rbox(dW, 0.07, 0.2, 0.04, 2), 'interior', 0, tr(0, cabY0 - 0.1, dz));
+  add(rbox(dW * 0.98, 0.03, 0.1, 0.02, 1), 'trim', 0, tr(0, cabY0 - 0.04, dz + 0.1));
+  add(rbox(0.19, 0.06, 0.07, 0.03, 1), 'trim', 0, mmul(tr(-0.36, cabY0 - 0.01, dz + 0.1), rotX(0.35)));
+  add(rbox(0.16, 0.05, 0.004, 0.002, 1), 'lampLens', 0, mmul(tr(-0.36, cabY0 - 0.015, dz + 0.134), rotX(0.35)));
+  add(rbox(0.1, 0.08, 0.05, 0.02, 1), 'interior', 0, tr(0, cabY0 - 0.12, dz + 0.17));
+  add(rbox(0.07, 0.045, 0.004, 0.002, 1), 'lampA', 0, mmul(tr(0, cabY0 - 0.09, dz + 0.1), rotX(0.4)));
+  for (const x of [-0.22, 0.18, 0.28, 0.0, 0.1]) add(rbox(0.035, 0.012, 0.006, 0.004, 1), 'chrome', 0, tr(x * (x === 0 || x === 0.1 ? 0.5 : 1), cabY0 - 0.02 - (x === 0 || x === 0.1 ? 0.07 : 0), dz + 0.14));
+  // steering wheel (flat-bottom), column, hub
+  const sw = mmul(tr(-0.36, cabY0 + 0.02, dz + 0.28), rotX(1.05));
+  add(torus(0.15, 0.017, 28, 8), 'trim', 0, sw);
+  add(rbox(0.02, 0.012, 0.15, 0.006, 1), 'trim', 0, mmul(sw, rotX(0)));
+  add(rbox(0.15, 0.012, 0.02, 0.006, 1), 'trim', 0, sw);
+  add(cylinder(0.04, 0.04, 0.03, 14), 'chrome', 0, mmul(sw, tr(0, 0.012, 0)));
+  add(cylinder(0.025, 0.03, 0.22, 10), 'trim', 0, mmul(tr(-0.36, cabY0 - 0.06, dz + 0.17), rotX(1.05)));
+  // centre console + shifter + handbrake
+  add(rbox(0.07, 0.12, 0.3, 0.03, 1), 'interior', 0, tr(0, cabY0 - 0.2, sz + 0.1));
+  add(rbox(0.03, 0.03, 0.05, 0.015, 1), 'chrome', 0, tr(0, cabY0 - 0.06, sz - 0.02));
+  add(rbox(0.012, 0.05, 0.012, 0.006, 1), 'trim', 0, tr(0, cabY0 - 0.1, sz - 0.02));
+  add(rbox(0.012, 0.012, 0.07, 0.006, 1), 'trim', 0, mmul(tr(0.05, cabY0 - 0.06, sz + 0.14), rotX(0.3)));
+  // headliner + pillars trim
+  const rz = (gh.roofZ[0] + gh.roofZ[1]) / 2;
+  add(rbox(W(rz) * 0.55, 0.008, (gh.roofZ[1] - gh.roofZ[0]) / 2 + 0.2, 0.004, 1), 'interior', 0, tr(0, tab(gh.R)(rz) - 0.07, rz));
+  // rear parcel shelf
+  add(rbox(W(gz1) * 0.6, 0.01, 0.16, 0.005, 1), 'interior', 0, tr(0, floorY + 0.42, gz1 - 0.15));
+
+  // ---- engine bay
+  const fe = ['bolt', 'sovereign', 'titan'].includes(spec.id);
+  const ez = fe ? (S.hood[0] + S.hood[1]) / 2 + 0.05 : (S.trunk[0] + S.trunk[1]) / 2 + (spec.id === 'spectre' ? 0.1 : -0.05);
+  const eLen = fe ? Math.min(0.95, (S.hood[1] - S.hood[0]) * 0.7) : Math.min(0.9, (S.trunk[1] - S.trunk[0]) * 0.55);
+  const eTop = top(ez) - 0.07;
+  const eBase = bot(ez) + 0.13;
+  const eH = Math.max(0.22, Math.min(0.46, eTop - eBase));
+  const ey = eBase + eH / 2;
+  const eW = Math.min(0.48, W(ez) * 0.5);
+  const flat = spec.id === 'spectre';
+  const wide = spec.id === 'stinger';
+  // block / crankcase
+  add(rbox(eW * 0.55, eH * 0.28, eLen / 2, 0.03, 1), 'engine', 0, tr(0, ey - eH * 0.22, ez));
+  // cylinder banks + valve covers + intake runners
+  const banks = flat ? [-1, 1] : wide ? [-1.5, -0.5, 0.5, 1.5] : [-1, 1];
+  const ang = flat ? 1.5 : wide ? 0.4 : 0.55;
+  for (const bk of banks) {
+    const sd = Math.sign(bk) || 1, a2 = (wide ? Math.abs(bk) > 1 ? 0.55 : 0.2 : ang) * sd;
+    const bm = mmul(tr(sd * eW * (flat ? 0.55 : wide ? 0.2 + 0.18 * Math.abs(bk) : 0.3), ey + (flat ? -eH * 0.12 : eH * 0.1), ez), rotZ(-a2));
+    add(rbox(eW * (flat ? 0.3 : wide ? 0.17 : 0.24), eH * 0.28, eLen / 2 * 0.95, 0.02, 1), 'engine', 0, bm);
+    add(rbox(eW * (flat ? 0.28 : wide ? 0.15 : 0.22), 0.018, eLen / 2 * 0.9, 0.01, 1), 'cover', 0, mmul(bm, tr(0, eH * (flat ? 0.0 : 0.3), 0)));
+    for (let i = 0; i < 4; i++) add(cylinder(0.022, 0.022, eH * 0.18, 8), 'alu', 0, mmul(bm, tr(0, eH * 0.38, -eLen * 0.33 + i * (eLen * 0.22))));
+  }
+  // intake plenum + throttle bodies
+  if (!flat) {
+    add(rbox(eW * 0.2, 0.035, eLen / 2 * 0.8, 0.02, 1), 'carbon', 0, tr(0, ey + eH * 0.38, ez));
+    for (let i = 0; i < 4; i++) add(cylinder(0.03, 0.03, 0.06, 10), 'alu', 0, tr(0, ey + eH * 0.42, ez - eLen * 0.3 + i * eLen * 0.2));
+  }
+  // forced induction: supercharger (Hellfire), turbos (twin / quad)
+  if (spec.id === 'bolt') {
+    add(rbox(eW * 0.3, 0.07, eLen * 0.32, 0.04, 2), 'alu', 0, tr(0, ey + eH * 0.52, ez));
+    add(cylinder(0.075, 0.075, 0.05, 16), 'chrome', 0, mmul(tr(0, ey + eH * 0.52, ez - eLen * 0.38), rotX(Math.PI / 2)));
+    add(cylinder(0.04, 0.04, 0.18, 12), 'alu', 0, mmul(tr(0, ey + eH * 0.48, ez - eLen * 0.62), rotX(Math.PI / 2)));
+  } else if (['sovereign', 'stinger', 'titan', 'spectre', 'tauro'].includes(spec.id) && spec.id !== 'tauro') {
+    const nT = spec.id === 'stinger' ? 4 : 2;
+    for (let i = 0; i < nT; i++) {
+      const sd = i % 2 ? 1 : -1, zo = nT === 4 ? (i < 2 ? -0.18 : 0.18) : 0;
+      add(cylinder(0.06, 0.05, 0.1, 14), 'alu', 0, mmul(tr(sd * eW * 0.82, ey - eH * 0.1, ez + zo * eLen), rotZ(Math.PI / 2)));
+      add(cylinder(0.045, 0.045, 0.07, 12), 'engine', 0, mmul(tr(sd * eW * 0.55, ey - eH * 0.1, ez + zo * eLen), rotZ(Math.PI / 2)));
+    }
+  }
+  // exhaust manifolds / headers
+  both((sd) => add(rbox(0.018, 0.018, eLen / 2 * 0.9, 0.01, 1), 'chrome', 0, tr(sd * eW * 0.78, ey - eH * 0.3, ez)));
+  // belt pulleys at the nose of the engine
+  const nose = ez + (fe ? -eLen / 2 : eLen / 2);
+  for (const [x, y, r] of [[-0.1, 0.0, 0.05], [0.1, 0.05, 0.04], [0.0, -0.1, 0.06]]) add(cylinder(r, r, 0.03, 12), 'alu', 0, mmul(tr(x, ey + y, nose + (fe ? -0.03 : 0.03)), rotX(Math.PI / 2)));
+  if (fe) {
+    // radiator + fan shroud, battery, strut-tower brace, air filter, bay walls
+    const rz0 = S.hood[0] + 0.05;
+    add(rbox(W(rz0) * 0.5, 0.17, 0.03, 0.01, 1), 'mesh', 0, tr(0, bot(rz0) + 0.34, rz0 + 0.12));
+    add(cylinder(0.1, 0.1, 0.03, 16), 'trim', 0, mmul(tr(0, bot(rz0) + 0.34, rz0 + 0.17), rotX(Math.PI / 2)));
+    add(rbox(0.08, 0.06, 0.07, 0.01, 1), 'trim', 0, tr(-eW * 1.1, ey - 0.02, ez + eLen * 0.3));
+    add(rbox(eW * 1.8, 0.012, 0.012, 0.005, 1), 'alu', 0, tr(0, ey + eH * 0.35, ez + eLen / 2 + 0.05));
+    add(rbox(0.1, 0.07, 0.15, 0.03, 1), 'carbon', 0, tr(eW * 1.15, ey + eH * 0.05, ez - eLen * 0.2));
+    both((sd) => add(rbox(0.012, eH * 0.55, eLen / 2 + 0.15, 0.006, 1), 'under', 0, tr(sd * (eW * 1.4), ey, ez)));
+    add(rbox(W(ez) * 0.8, eH * 0.55, 0.012, 0.006, 1), 'under', 0, tr(0, ey, ez + eLen / 2 + 0.17));
+  } else {
+    // rear / mid engine: firewall behind the cabin, bay side walls, rear cross brace
+    add(rbox(W(gz1) * 0.7, 0.28, 0.012, 0.006, 1), 'under', 0, tr(0, floorY + 0.28, gz1 + 0.02));
+    both((sd) => add(rbox(0.012, eH * 0.6, eLen / 2 + 0.12, 0.006, 1), 'under', 0, tr(sd * eW * 1.35, ey, ez)));
+    add(rbox(eW * 1.2, 0.012, 0.012, 0.005, 1), 'alu', 0, tr(0, ey + eH * 0.2, ez + eLen / 2 + 0.1));
+  }
+  // transmission tail
+  add(rbox(0.1, 0.1, 0.18, 0.04, 1), 'engine', 0, tr(0, ey - eH * 0.2, ez + (fe ? eLen / 2 + 0.2 : -eLen / 2 - 0.2)));
 }
 function sphere2(r) { return lathe(Array.from({ length: 9 }, (_, i) => { const a = (i / 8) * Math.PI * 0.5; return [Math.sin(a) * r + 0.0005, Math.cos(a) * r * 0.5]; }), 20); }
 

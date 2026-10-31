@@ -36,7 +36,7 @@ export function prepare(spec) {
   const Pw = spec.hp * 745.7 * 0.88;
   P.CdA = Math.max(0.3, (Pw / vNat - 0.014 * spec.kg * G) / (0.5 * RHO * vNat * vNat));
   P.Iw = 1.4 + (g.RR - 0.33) * 9;
-  P.bMax = [spec.kg * G * spec.brakeG * 0.72 * g.RF / 2, spec.kg * G * spec.brakeG * 0.28 * g.RR / 2];
+  P.bMax = [spec.kg * G * spec.brakeG * 0.72 * 1.0 * g.RF / 2, spec.kg * G * spec.brakeG * 0.28 * g.RR / 2];
   // suspension per corner
   const wF = 1 - g.wR;
   P.mcF = (spec.kg * wF) / 2;
@@ -183,7 +183,7 @@ export class Vehicle {
     if (this.shiftT > 0) this.shiftT -= dt;
     // traction control
     let tcF = 1;
-    if (this.assist >= 2) {
+    if (this.assist >= 2 && inp.brake < 0.3) {
       let mx = 0;
       for (const w of drv) mx = Math.max(mx, w.tcSlip || 0);
       if (mx > 0.3) { tcF = clamp(1 - (mx - 0.3) * 2.5, 0.3, 1); this.tcAct = 1; } else this.tcAct *= 0.9;
@@ -299,12 +299,12 @@ export class Vehicle {
         t += clamp((mate.omega - w.omega) * s.lsd * 0.5, -lim, lim);
       }
       Tdrv[i] = t;
-      if (this.assist >= 2) {
+      if (this.assist >= 2 && inp.brake < 0.3) {
         const capF = clamp(1 - ((w.tcSlip || 0) - 0.25) * 3, 0.3, 1);
         capT[i] = 0.97 * capF * (w.FmaxPrev || 0) * w.R + 40;
       }
     }
-    if (this.assist >= 2) {
+    if (this.assist >= 2 && inp.brake < 0.3) {
       let left = 0, head = 0;
       for (let i = 0; i < 4; i++) {
         if (Math.abs(Tdrv[i]) > capT[i]) { left += Tdrv[i] - Math.sign(Tdrv[i]) * capT[i]; Tdrv[i] = Math.sign(Tdrv[i]) * capT[i]; this.tcAct = 1; }
@@ -420,6 +420,13 @@ export class Vehicle {
     }
     this.airborne = !anyGround;
 
+    // ---- locked-front hold: with the pedal fully down the locked front tyres bite (static friction),
+    // so a launch-control burnout keeps the car in place; easing the pedal releases it gradually
+    if (inp.brake > 0.6 && inp.throttle > 0.3 && speed < 6 && !this.airborne && this.gear > 0) {
+      const k = 6 * clamp((inp.brake - 0.6) / 0.4, 0, 1) * dt;
+      const vl = vf * (1 - Math.exp(-k));
+      b.v[0] -= fwd[0] * vl; b.v[1] -= fwd[1] * vl * 0.0; b.v[2] -= fwd[2] * vl;
+    }
     // ---- aero
     const CdA = P.CdA;
     if (speed > 0.1) {

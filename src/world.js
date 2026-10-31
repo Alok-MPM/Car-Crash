@@ -3,6 +3,7 @@ import { Body, GROUP } from './physics.js';
 import { rbox, cylinder, lathe, box, plane, torus, extrude, merge, trs, makeGeo, fixWinding } from './geo.js';
 import { m4, mulberry32, clamp } from './math.js';
 import { Builder, M } from './carmodel.js';
+import { Structures } from './buildings.js';
 
 const lin = (c) => c.map((v) => Math.pow(v, 2.2));
 
@@ -170,26 +171,28 @@ export class Scene {
       this.boards.push({ m: this.meshes.post, model: m4.fromTRS(new Float32Array(16), [24, 0.7, z], [0, 0, 0, 1], 1) });
       this.boards.push({ m: this.meshes.post, model: m4.fromTRS(new Float32Array(16), [-24, 0.7, z], [0, 0, 0, 1], 1) });
     }
-    // buildings (static, collidable) around the arena
-    const bm = r.createMesh(rbox(1, 1, 1, 0.01, 1), { mat: { kind: 0, base: lin([0.5, 0.5, 0.52]), rough: 0.9 } });
+    // destructible buildings
+    const S = (this.structures = new Structures(this.ctx));
     this.bld = [];
-    const bldg = (x, z, w, d, h, col) => {
-      const mesh = r.createMesh(rbox(w / 2, h / 2, d / 2, 0.05, 1), { mat: { kind: 0, base: lin(col), rough: 0.85 } });
-      this.bld.push({ mesh, model: m4.fromTRS(new Float32Array(16), [x, h / 2, z], [0, 0, 0, 1], 1) });
-      const b = new Body({ fixed: true, raycast: false, pos: [x, h / 2, z], group: GROUP.STATIC });
-      b.addBox([w / 2, h / 2, d / 2]);
-      world.add(b);
-    };
-    bldg(-220, -140, 40, 60, 14, [0.62, 0.6, 0.55]);
-    bldg(260, -200, 60, 40, 11, [0.45, 0.5, 0.58]);
-    bldg(-250, 40, 30, 50, 9, [0.55, 0.45, 0.4]);
-    bldg(240, 30, 50, 30, 16, [0.6, 0.6, 0.62]);
-    // end wall of the runway
-    const endMesh = r.createMesh(rbox(30, 6, 3, 0.1, 1), { mat: { kind: 6, base: [1, 1, 1], rough: 0.95, tex: this.tex.block, texScale: 1 } });
-    this.bld.push({ mesh: endMesh, model: m4.fromTRS(new Float32Array(16), [0, 6, -6100], [0, 0, 0, 1], 1) });
-    const eb = new Body({ fixed: true, pos: [0, 6, -6100], group: GROUP.STATIC });
-    eb.addBox([30, 6, 3]);
-    world.add(eb);
+    const house = (x, z, st) => S.addBuilding({ x, z, w: 8, d: 6, floors: 2, style: st || 'plaster', seg: 3 });
+    // west district
+    S.addBuilding({ x: -90, z: -340, w: 14, d: 14, floors: 9, style: 'glass' });
+    S.addBuilding({ x: -130, z: -340, w: 20, d: 14, floors: 6, style: 'concrete' });
+    S.addBuilding({ x: -178, z: -340, w: 28, d: 12, floors: 5, style: 'brick' });
+    S.addBuilding({ x: -125, z: -405, w: 26, d: 16, floors: 2, style: 'metal', seg: 4 });
+    house(-80, -400); house(-68, -400, 'brick'); house(-80, -412); house(-68, -412, 'brick');
+    // east district
+    S.addBuilding({ x: 70, z: -380, w: 12, d: 12, floors: 7, style: 'concrete' });
+    S.addBuilding({ x: 112, z: -380, w: 24, d: 12, floors: 4, style: 'brick' });
+    S.addBuilding({ x: 140, z: -305, w: 22, d: 14, floors: 2, style: 'metal', seg: 4 });
+    for (let i = 0; i < 6; i++) house(50 + (i % 3) * 12, -300 - Math.floor(i / 3) * 14, i % 2 ? 'brick' : 'plaster');
+    // far landmarks
+    S.addBuilding({ x: -220, z: -140, w: 30, d: 14, floors: 4, style: 'concrete' });
+    S.addBuilding({ x: 260, z: -200, w: 28, d: 14, floors: 3, style: 'brick' });
+    S.addBuilding({ x: -250, z: 40, w: 30, d: 18, floors: 2, style: 'metal', seg: 4 });
+    S.addBuilding({ x: 240, z: 30, w: 20, d: 14, floors: 5, style: 'glass' });
+    // end wall of the runway (stacked concrete blocks)
+    S.addBarrier({ x: 0, z: -6100, len: 60, th: 3, h: 6, rows: 2, seg: 3 });
     // ramps (fixed, raycastable)
     this.ramps = [];
     const ramp = (x, z, yaw, len, wid, rise, name) => {
@@ -309,6 +312,7 @@ export class Scene {
   }
 
   update(dt) {
+    this.structures.update(dt);
     // remove props that fell absurdly far
     for (const p of this.props) if (p.body.pos[1] < -50) { p.dead = true; }
   }
@@ -320,7 +324,7 @@ export class Scene {
     for (const m of this.marks) r.add(m, this.markModel, { cast: false });
     const cx = cam[0], cz = cam[2];
     for (const b of this.boards) if (Math.abs(b.model[14] - cz) < 900) r.add(b.m, b.model, { cast: false });
-    for (const b of this.bld) r.add(b.mesh, b.model);
+    this.structures.draw(cam);
     for (const rp of this.ramps) r.add(rp.mesh, this._rampModel(rp));
     for (const p of this.props) {
       if (p.dead) continue;
