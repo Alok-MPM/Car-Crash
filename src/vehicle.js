@@ -207,11 +207,11 @@ export class Vehicle {
         mult = 0.74 + 0.26 * this.boost;
       }
       const engBrake = (10 + (rpmEng / s.redline) * P.tqMax * 0.11) * (1 - tl);
-      Te = tl * Tf * mult * this.powerScale - engBrake;
+      Te = (tl * Tf * mult * this.powerScale - engBrake) * 10;
       this.revLimiter = rpmEng >= s.redline - 20;
       if (this.revLimiter && Te > 0) Te = 0;
       if (this.shiftT > 0) Te = 0;
-      if (s.vNat && vf * 3.6 > s.vmax) Te = Math.min(Te, 0);
+      //if (s.vNat && vf * 3.6 > s.vmax) Te = Math.min(Te, 0);
       if (rpmEng < s.idle * 0.8) Te = 0;
     }
     // gear changes
