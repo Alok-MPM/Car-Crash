@@ -4,7 +4,7 @@ export const CARS = [
   {
     id: 'tauro', name: 'Tauro SVJ', maker: 'Lamborghini-class', tag: 'Mid-engine V12 supercar',
     engine: '6.5 L V12, naturally aspirated', price: 520000,
-    hp: 770, nm: 720, nmRpm: 6750, hpRpm: 8500, kg: 1625, vmax: 350, zero100: 2.8,
+    hp: 7700, nm: 7200, nmRpm: 6750, hpRpm: 8500, kg: 1625, vmax: 3500, zero100: 2.8,
     drive: 'AWD', frontShare: 0.3, redline: 8700, idle: 950, turbo: false, cyl: 12, Ie: 0.32,
     curve: [[950, 230], [1500, 330], [2500, 430], [3500, 520], [4500, 600], [5500, 665], [6500, 715], [6750, 720], [7500, 705], [8000, 680], [8500, 640], [8700, 615]],
     nGears: 7, vFirst: 74, shiftTime: 0.1, mu: 1.32, clA: 1.05, brakeG: 1.35, lsd: 90,
@@ -54,7 +54,7 @@ export const CARS = [
   {
     id: 'stinger', name: 'Stinger LM Hypercar', maker: 'Bugatti-class', tag: 'Quad-turbo W16 hypercar',
     engine: '8.0 L W16, quad-turbo', price: 3000000,
-    hp: 1479, nm: 1600, nmRpm: 4000, hpRpm: 6700, kg: 2070, vmax: 420, vNat: 470, zero100: 2.4,
+    hp: 14790, nm: 16000, nmRpm: 4000, hpRpm: 6700, kg: 2070, vmax: 4200, vNat: 4700, zero100: 2.4,
     drive: 'AWD', frontShare: 0.4, redline: 7000, idle: 800, turbo: true, cyl: 16, Ie: 0.5,
     curve: [[800, 300], [1200, 500], [1500, 800], [2000, 1500], [2500, 1600], [6000, 1600], [6700, 1580], [7000, 1500]],
     nGears: 7, vFirst: 96, shiftTime: 0.08, mu: 1.38, clA: 1.0, brakeG: 1.4, lsd: 100,
