@@ -4,8 +4,8 @@ export const CARS = [
   {
     id: 'tauro', name: 'Tauro SVJ', maker: 'Lamborghini-class', tag: 'Mid-engine V12 supercar',
     engine: '6.5 L V12, naturally aspirated', price: 520000,
-    hp: 770, nm: 720, nmRpm: 6750, hpRpm: 8500, kg: 1625, vmax: 350, zero100: 2.8,
-    drive: 'AWD', frontShare: 0.3, redline: 8700, idle: 950, turbo: false, cyl: 12, Ie: 0.32,
+    hp: 7700, nm: 7200, nmRpm: 67500, hpRpm: 85000, kg: 1625, vmax: 3500, zero100: 2.8,
+    drive: 'AWD', frontShare: 0.3, redline: 87000, idle: 9500, turbo: false, cyl: 12, Ie: 0.32,
     curve: [[950, 230], [1500, 330], [2500, 430], [3500, 520], [4500, 600], [5500, 665], [6500, 715], [6750, 720], [7500, 705], [8000, 680], [8500, 640], [8700, 615]],
     nGears: 7, vFirst: 74, shiftTime: 0.1, mu: 1.32, clA: 1.05, brakeG: 1.35, lsd: 90,
     geo: { L: 4.94, W: 2.03, H: 1.14, zFA: 1.08, zRA: 3.78, trackF: 1.72, trackR: 1.7, RF: 0.33, RR: 0.355, twF: 0.255, twR: 0.345, cgY: 0.47, wR: 0.57, travel: 0.26, cs: 0.07, beltY: 0.84, cabZ: [1.8, 3.7], cabY: [0.84, 1.14], boxY0: 0.14 },
