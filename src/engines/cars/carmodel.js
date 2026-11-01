@@ -1,7 +1,7 @@
 // Procedural car bodies: lofted shell + glasshouse with real wheel arches, then details (lights, grille, mirrors,
 // wheels, interior). Everything is plain typed arrays so the same code runs in node tests and in the browser.
-import { clamp, lerp, smoothstep, pchip, mulberry32 } from './math.js';
-import { rbox, cylinder, lathe, torus, box, makeGeo, merge, trs, fixWinding, computeNormals } from './geo.js';
+import { clamp, lerp, smoothstep, pchip, mulberry32 } from '../../core/math.js';
+import { rbox, cylinder, lathe, torus, box, makeGeo, merge, trs, fixWinding, computeNormals } from '../../core/geo.js';
 import { SHAPES } from './shapes.js';
 
 export const PART = { BODY: 0, HOOD: 1, TRUNK: 2, BUMF: 3, BUMR: 4, DOORL: 5, DOORR: 6, MIRL: 7, MIRR: 8, WING: 9, COUNT: 10 };

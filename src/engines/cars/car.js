@@ -1,8 +1,8 @@
 // A car in the world: physics vehicle + deformable render mesh + wheels + damage model.
 import { buildCarGeometry, buildWheel, MATS, PART, PART_NAME, paintDecals } from './carmodel.js';
 import { Vehicle } from './vehicle.js';
-import { Body, GROUP } from './physics.js';
-import { m4, clamp, lerp, smoothstep, hash3, vnoise, mulberry32 } from './math.js';
+import { Body, GROUP } from '../../core/physics.js';
+import { m4, clamp, lerp, smoothstep, hash3, vnoise, mulberry32 } from '../../core/math.js';
 
 const PROTO = new Map();
 const hexLin = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255].map((v) => Math.pow(v, 2.2));

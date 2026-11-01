@@ -1,7 +1,7 @@
 // Vehicle dynamics: raycast suspension, brush-style combined-slip tyres, engine torque curve,
 // clutch/launch model, auto gearbox, AWD/RWD drivelines, aero drag + downforce.
-import { Body, GROUP } from './physics.js';
-import { clamp, lerp, lin, smoothstep } from './math.js';
+import { Body, GROUP } from '../../core/physics.js';
+import { clamp, lerp, lin, smoothstep } from '../../core/math.js';
 
 const RHO = 1.2, G = 9.81;
 

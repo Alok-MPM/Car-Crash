@@ -22,13 +22,13 @@ export class FX {
     this.add({ m: 0, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: size, g: 1.2 + Math.random(), life, t: 0, c: col, a: alpha, drag: 1.4, up: 0.8, seed: Math.random() * 10, rot: Math.random() * 6, rv: (Math.random() - 0.5) });
   }
   puff(p, size, col) {
-    for (let i = 0; i < 4; i++) this.smoke([p[0] + (Math.random() - 0.5) * 0.4, p[1] + Math.random() * 0.3, p[2] + (Math.random() - 0.5) * 0.4], [(Math.random() - 0.5) * 3, Math.random() * 1.5, (Math.random() - 0.5) * 3], size * (0.5 + Math.random() * 0.5), 0.8 + Math.random() * 0.7, col, 0.3);
+    for (let i = 0; i < 4; i++) this.smoke([p[0] + (Math.random() - 0.5) * 0.4, p[1] + Math.random() * 0.3, p[2] + (Math.random() - 0.5) * 0.4], [(Math.random() - 0.5) * 3, Math.random() * 1.5, (Math.random() - 0.5) * 3], size * (0.5 + Math.random() * 0.5), 0.8 + Math.random() * 0.7, col, 0.12);
   }
   tire(p, v, k) {
     this.smoke(p, [v[0] * 0.2 + (Math.random() - 0.5) * 0.6, 0.4 + Math.random() * 0.6, v[2] * 0.2 + (Math.random() - 0.5) * 0.6], 0.35 + k * 0.5, 1.2 + Math.random() * 0.8, [0.78, 0.78, 0.8], 0.28 * clamp(k + 0.3, 0, 1));
   }
   dust(p, v, k) {
-    this.smoke(p, [v[0] * 0.15, 0.6 + Math.random(), v[2] * 0.15], 0.4 + k * 0.6, 1.4, [0.55, 0.47, 0.37], 0.35);
+    this.smoke(p, [v[0] * 0.15, 0.6 + Math.random(), v[2] * 0.15], 0.4 + k * 0.6, 1.4, [0.55, 0.47, 0.37], 0.18);
   }
   fire(p, v, s) {
     this.add({ m: 1, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: s, g: -0.8, life: 0.5 + Math.random() * 0.45, t: 0, c: [1.0, 0.45 + Math.random() * 0.25, 0.1], a: 1, drag: 0.5, up: 2.5, seed: Math.random() * 10, rot: 0, rv: 0 });

@@ -159,7 +159,7 @@ void main(){
     albedo = uBase * vCol; ao = 0.8 + 0.2 * smoothstep(0.,0.4,abs(vNrm.y));
   } else if (uKind == 6) {
     // textured standard
-    albedo = mix(albedo, tx.rgb * uBase, tx.a);
+    albedo = tx.rgb * uBase * vCol;
   }
 
   float NdV = max(dot(N, Vv), 1e-3);

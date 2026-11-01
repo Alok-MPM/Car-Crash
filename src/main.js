@@ -1,14 +1,14 @@
 // Crash Yard: game loop, input, camera, HUD, menus.
-import { Renderer } from './gfx.js';
-import { World, GROUP } from './physics.js';
-import { CARS, getCar } from './cars.js';
-import { Car, drawDebris } from './car.js';
-import { Scene } from './world.js';
-import { FX } from './fx.js';
-import { Sfx } from './audio.js';
-import { paintDecals } from './carmodel.js';
-import { SHAPES } from './shapes.js';
-import { m4, clamp, lerp, smoothstep } from './math.js';
+import { Renderer } from './core/gfx.js';
+import { World, GROUP } from './core/physics.js';
+import { CARS, getCar } from './engines/cars/cars.js';
+import { Car, drawDebris } from './engines/cars/car.js';
+import { Scene } from './engines/land/world.js';
+import { FX } from './core/fx.js';
+import { Sfx } from './core/audio.js';
+import { paintDecals } from './engines/cars/carmodel.js';
+import { SHAPES } from './engines/cars/shapes.js';
+import { m4, clamp, lerp, smoothstep } from './core/math.js';
 
 const $ = (id) => document.getElementById(id);
 const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;

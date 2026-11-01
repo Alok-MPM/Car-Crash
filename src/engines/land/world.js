@@ -1,9 +1,9 @@
 // The proving ground: tarmac, runway with markings, crash yard full of breakable props, ramps, parked cars.
-import { Body, GROUP } from './physics.js';
-import { rbox, cylinder, lathe, box, plane, torus, extrude, merge, trs, makeGeo, fixWinding } from './geo.js';
-import { m4, mulberry32, clamp } from './math.js';
-import { Builder, M } from './carmodel.js';
-import { Structures } from './buildings.js';
+import { Body, GROUP } from '../../core/physics.js';
+import { rbox, cylinder, lathe, box, plane, torus, extrude, merge, trs, makeGeo, fixWinding } from '../../core/geo.js';
+import { m4, mulberry32, clamp } from '../../core/math.js';
+import { Builder, M } from '../cars/carmodel.js';
+import { Structures } from '../buildings/structures.js';
 
 const lin = (c) => c.map((v) => Math.pow(v, 2.2));
 
@@ -174,23 +174,10 @@ export class Scene {
     // destructible buildings
     const S = (this.structures = new Structures(this.ctx));
     this.bld = [];
-    const house = (x, z, st) => S.addBuilding({ x, z, w: 8, d: 6, floors: 2, style: st || 'plaster', seg: 3 });
-    // west district
-    S.addBuilding({ x: -90, z: -340, w: 14, d: 14, floors: 9, style: 'glass' });
-    S.addBuilding({ x: -130, z: -340, w: 20, d: 14, floors: 6, style: 'concrete' });
-    S.addBuilding({ x: -178, z: -340, w: 28, d: 12, floors: 5, style: 'brick' });
-    S.addBuilding({ x: -125, z: -405, w: 26, d: 16, floors: 2, style: 'metal', seg: 4 });
-    house(-80, -400); house(-68, -400, 'brick'); house(-80, -412); house(-68, -412, 'brick');
-    // east district
-    S.addBuilding({ x: 70, z: -380, w: 12, d: 12, floors: 7, style: 'concrete' });
-    S.addBuilding({ x: 112, z: -380, w: 24, d: 12, floors: 4, style: 'brick' });
-    S.addBuilding({ x: 140, z: -305, w: 22, d: 14, floors: 2, style: 'metal', seg: 4 });
-    for (let i = 0; i < 6; i++) house(50 + (i % 3) * 12, -300 - Math.floor(i / 3) * 14, i % 2 ? 'brick' : 'plaster');
-    // far landmarks
-    S.addBuilding({ x: -220, z: -140, w: 30, d: 14, floors: 4, style: 'concrete' });
-    S.addBuilding({ x: 260, z: -200, w: 28, d: 14, floors: 3, style: 'brick' });
-    S.addBuilding({ x: -250, z: 40, w: 30, d: 18, floors: 2, style: 'metal', seg: 4 });
-    S.addBuilding({ x: 240, z: 30, w: 20, d: 14, floors: 5, style: 'glass' });
+    // engineered buildings (Building Engineer): recipes only, the engine works out structure, openings, rooms and colours
+    S.addBuilding({ recipe: 'house', x: -48, z: -70 });
+    S.addBuilding({ recipe: 'houseSmall', x: 50, z: -90 });
+    S.addBuilding({ recipe: 'shop', x: -52, z: -112 });
     // end wall of the runway (stacked concrete blocks)
     S.addBarrier({ x: 0, z: -6100, len: 60, th: 3, h: 6, rows: 2, seg: 3 });
     // ramps (fixed, raycastable)
