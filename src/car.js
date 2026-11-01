@@ -140,7 +140,8 @@ export class Car {
     if (nowT - lastT < 0.35 && v < 8) return;
     ot.set(other.id, nowT);
     if (ot.size > 40) for (const [k, t] of ot) if (nowT - t > 2) ot.delete(k);
-    const E = 0.5 * mu * v * v; // joules
+    let E = 0.5 * mu * v * v; // joules
+    if (m2 > 6 * m1 && other.group !== GROUP.STATIC) E *= 1 + Math.min(4, m2 / m1 / 8); // tonnes of masonry landing on a car
     const ek = E / 154000;
     let depth = 0.35 * Math.pow(ek, 0.62);
     if (other.group === GROUP.CAR) depth *= 0.8;
@@ -489,6 +490,7 @@ export function drawDebris(ctx, d) {
     r.add(d.mesh, O, { only: d.part });
   } else if (d.kind === 'rubble') {
     m4.fromTRS(M, b.pos, b.q, d.s);
+    if (d.k) { for (let i = 0; i < 3; i++) { M[i] *= d.k[0]; M[4 + i] *= d.k[1]; M[8 + i] *= d.k[2]; } }
     r.add(d.mesh, M, { cast: false });
   } else if (d.kind === 'wheel') {
     const wm = d.car.wheelMesh[d.front ? 0 : 1];

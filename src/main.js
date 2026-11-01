@@ -135,6 +135,7 @@ function boomBarrel(pr) {
   blast(pr.body.pos.slice(), 11, 10);
 }
 let lastBlast = null;
+ctx.blast = blast;
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 world.onImpact = (e) => {
@@ -614,6 +615,7 @@ function frame(t) {
     if (c.npc && c.vehicle.speed < 3) continue;
     const v = c.vehicle;
     v.wheels.forEach((w, i) => {
+      if (w.detached && w.stubOn && w.stubV > 1.5) { const kk = Math.min(1, w.stubV / 15); for (let q = 0; q < 2; q++) if (Math.random() < kk) fx.spark(w.stubP, [-v.body.v[0] * 0.15 + (Math.random() - 0.5) * 3, 1 + Math.random() * 2.5, -v.body.v[2] * 0.15 + (Math.random() - 0.5) * 3]); fx.gouge(c.id + 'h' + i, w.stubP[0], w.stubP[2], [v.body.v[0], 0, v.body.v[2]], 0.12, 0.6 * kk + 0.2); } else if (w.detached) fx.gouge(c.id + 'h' + i, 0, 0, [0, 0, 1], 0.1, 0);
       if (w.detached || !w.grounded) { fx.skid(c.id + i + (c === player ? 'p' : c.body.id), [0, 0, 0], [0, 0, 1], 0.2, 0); return; }
       const s = Math.max(w.slipLong * 0.8, Math.abs(w.slipLat) * 2.3) * (w.Fn > 300 ? 1 : 0);
       const key = (c === player ? 'p' : c.body.id) + i;
@@ -646,7 +648,7 @@ function frame(t) {
   trackStats(sdt);
   // debris housekeeping
   const deb = ctx.debris;
-  for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if (d.t > 45 || d.body.pos[1] < -30 || deb.length > 230 && i < deb.length - 230) { world.remove(d.body); deb.splice(i, 1); } }
+  for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if ((d.kind !== 'rubble' && d.t > 45) || d.t > 900 || d.body.pos[1] < -30 || deb.length > 1000 && i < deb.length - 1000) { world.remove(d.body); deb.splice(i, 1); } }
   // camera
   updateCamera(dt);
   // audio

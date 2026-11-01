@@ -5,18 +5,24 @@ import { Body, GROUP } from './physics.js';
 import { m4, clamp } from './math.js';
 import { makeGeo } from './geo.js';
 
-const FLOOR_H = 3.2, SLAB_T = 0.35, WALL_T = 0.4;
+const FLOOR_H = 3.2, SLAB_T = 0.3, WALL_T = 0.3, CT = 0.5;
 
-// panel strength (joules absorbed before it gives way), free mass (kg), repair value ($)
+// Universal material table. Mass = density x volume (or areal density for thin cladding / glass); strength = energy a
+// panel absorbs before it gives way (J per m3, or J per m2 of face for thin sheets). Numbers are order-of-magnitude real:
+// a car at 60 km/h (~240 kJ) wrecks an infill wall bay, a reinforced column needs several hundred kJ.
 const TYPES = {
-  glass: { mass: 700, hp: 70e3, value: 1200, rub: [0.62, 0.7, 0.75] },
-  brick: { mass: 1100, hp: 130e3, value: 900, rub: [0.55, 0.3, 0.24] },
-  plaster: { mass: 1000, hp: 110e3, value: 800, rub: [0.75, 0.7, 0.6] },
-  concrete: { mass: 1700, hp: 240e3, value: 1400, rub: [0.58, 0.58, 0.56] },
-  metal: { mass: 450, hp: 55e3, value: 500, rub: [0.5, 0.52, 0.55] },
-  slab: { mass: 2600, hp: 380e3, value: 2500, rub: [0.5, 0.5, 0.5] },
-  barrier: { mass: 2200, hp: 520e3, value: 1500, rub: [0.6, 0.6, 0.58] },
+  glass: { area: 32, eA: 0.7e3, value: 1200, rub: [0.62, 0.7, 0.75] },      // curtain-wall glass + frame
+  brick: { dens: 1800, eV: 52e3, value: 900, rub: [0.55, 0.3, 0.24] },        // 230 mm brick masonry
+  plaster: { dens: 1700, eV: 44e3, value: 800, rub: [0.75, 0.7, 0.6] },       // plastered block wall
+  concrete: { dens: 2400, eV: 95e3, value: 1400, rub: [0.58, 0.58, 0.56] },   // RCC panel
+  metal: { area: 14, eA: 1.8e3, value: 500, rub: [0.5, 0.52, 0.55] },        // sheet cladding
+  slab: { dens: 2400, eV: 120e3, value: 2500, rub: [0.5, 0.5, 0.5] },         // RCC floor slab
+  column: { dens: 2450, eV: 380e3, value: 2200, rub: [0.52, 0.52, 0.5] },     // RCC column with rebar
+  core: { dens: 2500, eV: 300e3, value: 3500, rub: [0.5, 0.5, 0.5] },        // RCC lift / stair core
+  barrier: { dens: 2400, eV: 140e3, value: 1500, rub: [0.6, 0.6, 0.58] },
 };
+const panelMass = (T, hx, hy, hz) => (T.area ? T.area * 4 * hy * Math.max(hx, hz) : T.dens * 8 * hx * hy * hz);
+const panelCap = (T, hx, hy, hz) => (T.eA ? T.eA * 4 * hy * Math.max(hx, hz) : T.eV * 8 * hx * hy * hz);
 
 // ---- textures: one atlas per style, 3 columns (window wall, plain wall, storefront) x 2 rows (intact, cracked)
 const STYLES = {
@@ -196,11 +202,12 @@ export class Structures {
     return this.mats[style];
   }
 
-  rubbleMesh(col) {
-    const key = col.join(',');
+  rubbleMesh(col, shade = 1) {
+    const key = col.join(',') + '|' + shade;
     if (!this.rubbleMeshes[key]) {
+      const f = [0.42, 0.55, 0.7][shade];
       const geo = { ...this.rubbleGeo, col: new Float32Array(this.rubbleGeo.col.length) };
-      for (let i = 0; i < geo.col.length; i += 3) { geo.col[i] = col[0]; geo.col[i + 1] = col[1]; geo.col[i + 2] = col[2]; }
+      for (let i = 0; i < geo.col.length; i += 3) { geo.col[i] = col[0] * f; geo.col[i + 1] = col[1] * f; geo.col[i + 2] = col[2] * f; }
       this.rubbleMeshes[key] = this.r.createMesh(geo, { mat: { kind: 0, base: [1, 1, 1], rough: 0.95 } });
     }
     return this.rubbleMeshes[key];
@@ -209,9 +216,10 @@ export class Structures {
   // ---------- construction ----------
   newPanel(B, o) {
     const T = TYPES[o.type];
+    const mass = panelMass(T, o.hx, o.hy, o.hz), cap = panelCap(T, o.hx, o.hy, o.hz);
     const P = {
-      B, kind: o.kind, type: o.type, f: o.f, cx: o.cx, cy: o.cy, cz: o.cz, hx: o.hx, hy: o.hy, hz: o.hz,
-      out: o.out || null, col: o.col ?? 0, hp: T.hp, maxHp: T.hp, state: 'fixed', below: [], above: [], lat: [], nbL: null, nbR: null,
+      B, kind: o.kind, type: o.type, f: o.f, cx: o.cx, cy: o.cy, cz: o.cz, hx: o.hx, hy: o.hy, hz: o.hz, str: !!o.str,
+      out: o.out || null, col: o.col ?? 0, hp: cap, maxHp: cap, mass, state: 'fixed', below: [], above: [], lat: [], nbL: null, nbR: null,
       y0: o.cy - o.hy, y1: o.cy + o.hy, body: null, lastO: 0, lastT: -1, releaseAt: 0,
     };
     const b = new Body({ fixed: true, pos: [B.x + o.cx, o.cy, B.z + o.cz], group: GROUP.STATIC, fric: 0.65, rest: 0.05 });
@@ -223,34 +231,70 @@ export class Structures {
     return P;
   }
 
+  // system 'frame': RCC columns + slabs carry everything, walls / glass are infill (they break, the building stands).
+  // system 'masonry': the walls themselves are load-bearing; lose enough of them and the slabs above come down.
   addBuilding(o) {
     const style = o.style || 'concrete';
     const ty = STYLES[style].type;
+    const sys = o.system || (ty === 'brick' ? 'masonry' : 'frame');
     const F = o.floors || 3, H = FLOOR_H, wallH = H - SLAB_T, seg = o.seg || 3.5;
-    const B = { x: o.x, z: o.z, w: o.w, d: o.d, floors: F, style, panels: [], free: new Set(), dirty: true, mesh: null, rebuildT: 0, freed: 0, fireStarted: false, collapseDust: 0, model: m4.fromTRS(new Float32Array(16), [o.x, 0, o.z], [0, 0, 0, 1], 1) };
+    const B = { x: o.x, z: o.z, w: o.w, d: o.d, floors: F, style, sys, panels: [], free: new Set(), dirty: true, mesh: null, rebuildT: 0, freed: 0, fireStarted: false, collapseDust: 0, hazards: [], model: m4.fromTRS(new Float32Array(16), [o.x, 0, o.z], [0, 0, 0, 1], 1) };
     B.radius = Math.hypot(o.w, o.d, F * H) / 2 + 2;
     B.cy = (F * H) / 2;
-    const nx = Math.max(2, Math.round(o.w / seg)), px = o.w / nx;
-    const nzi = Math.max(1, Math.round((o.d - 2 * WALL_T) / seg)), pz = (o.d - 2 * WALL_T) / nzi;
-    const nzFull = Math.max(2, Math.round(o.d / seg));
+    const bay = F >= 4 ? 5.5 : 7;
+    const sx = Math.max(1, Math.ceil(o.w / bay)), sz = Math.max(1, Math.ceil(o.d / bay));
+    const spx = o.w / sx, spz = o.d / sz;
+    const kx = Math.max(1, Math.round(spx / seg)), kz = Math.max(1, Math.round(spz / seg));
+    // grid lines (column centres); outer lines sit flush with the outside faces
+    const gx = [], gz = [];
+    for (let a = 0; a <= sx; a++) gx.push(a === 0 ? -o.w / 2 + CT / 2 : a === sx ? o.w / 2 - CT / 2 : -o.w / 2 + spx * a);
+    for (let c = 0; c <= sz; c++) gz.push(c === 0 ? -o.d / 2 + CT / 2 : c === sz ? o.d / 2 - CT / 2 : -o.d / 2 + spz * c);
+    const frame = sys === 'frame';
+    const wallType = (f) => (f === 0 && style === 'glass' ? 'glass' : ty);
     for (let f = 0; f < F; f++) {
       const y0 = f * H, cy = y0 + wallH / 2;
       const kindCol = f === 0 && o.store !== false ? 2 : 0;
-      const rowS = [], rowN = [], colE = [], colW = [];
-      for (let i = 0; i < nx; i++) {
-        const x = -o.w / 2 + px * (i + 0.5);
-        rowS.push(this.newPanel(B, { kind: 'wall', type: ty, f, cx: x, cy, cz: o.d / 2 - WALL_T / 2, hx: px / 2, hy: wallH / 2, hz: WALL_T / 2, out: [0, 1], col: kindCol }));
-        rowN.push(this.newPanel(B, { kind: 'wall', type: ty, f, cx: x, cy, cz: -o.d / 2 + WALL_T / 2, hx: px / 2, hy: wallH / 2, hz: WALL_T / 2, out: [0, -1], col: kindCol }));
+      const core = frame && F >= 4 ? { ax: Math.min(3, o.w * 0.2), az: Math.min(3, o.d * 0.2) } : null;
+      if (core) {
+        const { ax, az } = core, t = 0.175;
+        for (const sg of [-1, 1]) {
+          this.newPanel(B, { kind: 'wall', type: 'core', f, cx: 0, cy, cz: sg * (az - t), hx: ax, hy: wallH / 2, hz: t, out: null, col: 1, str: true });
+          this.newPanel(B, { kind: 'wall', type: 'core', f, cx: sg * (ax - t), cy, cz: 0, hx: t, hy: wallH / 2, hz: az - 2 * t, out: null, col: 1, str: true });
+        }
       }
-      for (let j = 0; j < nzi; j++) {
-        const z = -o.d / 2 + WALL_T + pz * (j + 0.5);
-        colE.push(this.newPanel(B, { kind: 'wall', type: ty, f, cx: o.w / 2 - WALL_T / 2, cy, cz: z, hx: WALL_T / 2, hy: wallH / 2, hz: pz / 2, out: [1, 0], col: kindCol }));
-        colW.push(this.newPanel(B, { kind: 'wall', type: ty, f, cx: -o.w / 2 + WALL_T / 2, cy, cz: z, hx: WALL_T / 2, hy: wallH / 2, hz: pz / 2, out: [-1, 0], col: kindCol }));
+      if (frame) for (let a = 0; a <= sx; a++) for (let c = 0; c <= sz; c++) {
+        if (core && Math.abs(gx[a]) < core.ax + 0.3 && Math.abs(gz[c]) < core.az + 0.3) continue;
+        this.newPanel(B, { kind: 'col', type: 'column', f, cx: gx[a], cy, cz: gz[c], hx: CT / 2, hy: wallH / 2, hz: CT / 2, out: null, col: 1, str: true });
       }
-      for (const line of [rowS, rowN, colE, colW]) for (let i = 0; i < line.length; i++) { line[i].nbL = line[i - 1] || null; line[i].nbR = line[i + 1] || null; }
-      // ceiling slab of this floor
-      const sx = Math.max(1, Math.ceil(o.w / 7)), sz = Math.max(1, Math.ceil(o.d / 7));
-      const spx = o.w / sx, spz = o.d / sz;
+      // perimeter walls: split between grid lines, trimmed where a column stands
+      const lineX = (zc, zOut, outV) => {
+        const row = [];
+        for (let a = 0; a < sx; a++) {
+          const x0 = frame ? gx[a] + CT / 2 : (a === 0 ? -o.w / 2 : gx[a] - 0), x1 = frame ? gx[a + 1] - CT / 2 : (a === sx - 1 ? o.w / 2 : gx[a + 1]);
+          const pw = (x1 - x0) / kx;
+          for (let i = 0; i < kx; i++) row.push(this.newPanel(B, { kind: 'wall', type: wallType(f), f, cx: x0 + pw * (i + 0.5), cy, cz: zc, hx: pw / 2, hy: wallH / 2, hz: WALL_T / 2, out: outV, col: kindCol, str: !frame }));
+        }
+        for (let i = 0; i < row.length; i++) { row[i].nbL = row[i - 1] || null; row[i].nbR = row[i + 1] || null; }
+      };
+      const lineZ = (xc, outV) => {
+        const row = [];
+        for (let c = 0; c < sz; c++) {
+          const z0 = frame ? gz[c] + CT / 2 : (c === 0 ? -o.d / 2 + WALL_T : gz[c]), z1 = frame ? gz[c + 1] - CT / 2 : (c === sz - 1 ? o.d / 2 - WALL_T : gz[c + 1]);
+          const pw = (z1 - z0) / kz;
+          for (let i = 0; i < kz; i++) row.push(this.newPanel(B, { kind: 'wall', type: wallType(f), f, cx: xc, cy, cz: z0 + pw * (i + 0.5), hx: WALL_T / 2, hy: wallH / 2, hz: pw / 2, out: outV, col: kindCol, str: !frame }));
+        }
+        for (let i = 0; i < row.length; i++) { row[i].nbL = row[i - 1] || null; row[i].nbR = row[i + 1] || null; }
+      };
+      lineX(o.d / 2 - WALL_T / 2, [0, 1]);
+      lineX(-o.d / 2 + WALL_T / 2, [0, -1]);
+      lineZ(o.w / 2 - WALL_T / 2, [1, 0]);
+      lineZ(-o.w / 2 + WALL_T / 2, [-1, 0]);
+      // masonry: interior bearing walls on the slab grid lines
+      if (!frame) {
+        for (let a = 1; a < sx; a++) lineZ(gx[a], null);
+        for (let c = 1; c < sz; c++) lineX(gz[c], null);
+      }
+      // floor slab (roof of this storey), one per bay
       const slabs = [];
       for (let a = 0; a < sx; a++) for (let c = 0; c < sz; c++) {
         slabs.push(this.newPanel(B, { kind: 'slab', type: 'slab', f, cx: -o.w / 2 + spx * (a + 0.5), cy: (f + 1) * H - SLAB_T / 2, cz: -o.d / 2 + spz * (c + 0.5), hx: spx / 2 - 0.01, hy: SLAB_T / 2, hz: spz / 2 - 0.01, out: null, col: 1 }));
@@ -261,13 +305,16 @@ export class Structures {
         if ((dx <= A.hx + C.hx + 0.05 && dz < 0.5) || (dz <= A.hz + C.hz + 0.05 && dx < 0.5)) { A.lat.push(C); C.lat.push(A); }
       }
     }
+    // LPG cylinders in kitchens / shops: the only way a building catches fire
+    const ng = o.gas ?? (ty === 'plaster' || ty === 'brick' ? (F <= 3 ? 1 : 2) : 0);
+    for (let i = 0; i < ng; i++) B.hazards.push({ x: o.x + (Math.random() - 0.5) * (o.w - 3), y: 0.6, z: o.z + (Math.random() - 0.5) * (o.d - 3), done: false });
     this.finishBuilding(B);
     return B;
   }
 
   // a long free-standing barrier / boundary wall of stacked concrete blocks
   addBarrier(o) {
-    const B = { x: o.x, z: o.z, w: o.len, d: o.th, floors: 1, style: 'barrier', panels: [], free: new Set(), dirty: true, mesh: null, rebuildT: 0, freed: 0, fireStarted: true, collapseDust: 0, model: m4.fromTRS(new Float32Array(16), [o.x, 0, o.z], [0, 0, 0, 1], 1) };
+    const B = { x: o.x, z: o.z, w: o.len, d: o.th, floors: 1, style: 'barrier', panels: [], free: new Set(), dirty: true, mesh: null, rebuildT: 0, freed: 0, fireStarted: true, collapseDust: 0, hazards: [], sys: 'barrier', model: m4.fromTRS(new Float32Array(16), [o.x, 0, o.z], [0, 0, 0, 1], 1) };
     B.radius = o.len / 2 + 4; B.cy = 3;
     const n = Math.round(o.len / o.seg), pw = o.len / n, ph = o.h / o.rows;
     for (let r = 0; r < o.rows; r++) {
@@ -328,27 +375,35 @@ export class Structures {
     if (P.B.style === 'glass' || P.col !== 1) for (let i = 0; i < clamp(n * 2, 4, 20); i++) fx.glass(p, [(Math.random() - 0.5) * 8, 1 + Math.random() * 4, (Math.random() - 0.5) * 8]);
   }
 
-  spawnRubble(P, p, n, dir, speed) {
+  // total rubble mass is conserved: a broken panel becomes pieces whose masses add up to what is left of it
+  spawnRubble(P, p, totalMass, dir, speed) {
     const T = TYPES[P.type], world = this.world;
+    const dens = T.dens || 1800;
+    let n = clamp(Math.round(totalMass / 160), 2, 16);
+    const L = this.rubble.length;
+    n = Math.max(L < 450 ? 2 : 1, Math.round(n * (L < 150 ? 1 : L < 300 ? 0.5 : L < 450 ? 0.25 : 0)));
+    const m = totalMass / n;
+    const s = Math.cbrt(m / dens);
     for (let i = 0; i < n; i++) {
-      const s = 0.22 + Math.random() * 0.4;
-      const m = clamp(T.mass / n * 0.4, 25, 220);
-      const body = new Body({ mass: m, pos: [p[0] + (Math.random() - 0.5) * 0.8, p[1] + (Math.random() - 0.5) * 0.6, p[2] + (Math.random() - 0.5) * 0.8], q: [0, 0, 0, 1], fric: 0.7, rest: 0.2, group: GROUP.DEBRIS, mask: GROUP.STATIC | GROUP.PROP | GROUP.DEBRIS | GROUP.CAR, angDamp: 0.2 });
-      body.addBox([s / 2, s / 2, s / 2]);
+      const ka = 0.55 + Math.random() * 1.1, kb = 0.55 + Math.random() * 1.1, kc = 0.55 + Math.random() * 1.1, nrm = Math.cbrt(1 / (ka * kb * kc));
+      const k = [ka * nrm, kb * nrm, kc * nrm];
+      const sz = s;
+      const body = new Body({ mass: m, pos: [p[0] + (Math.random() - 0.5) * 0.8, p[1] + (Math.random() - 0.5) * 0.6, p[2] + (Math.random() - 0.5) * 0.8], q: [0, 0, 0, 1], fric: 0.75, rest: 0.12, group: GROUP.DEBRIS, mask: GROUP.STATIC | GROUP.PROP | GROUP.DEBRIS | GROUP.CAR, angDamp: 0.25 });
+      body.addBox([sz * k[0] / 2, sz * k[1] / 2, sz * k[2] / 2]);
       body.v = [dir[0] * speed * 0.4 + (Math.random() - 0.5) * 4, 1 + Math.random() * 3, dir[2] * speed * 0.4 + (Math.random() - 0.5) * 4];
       body.w = [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8];
       world.add(body);
-      const d = { body, kind: 'rubble', mesh: this.rubbleMesh(T.rub), s, t: 0 };
+      const d = { body, kind: 'rubble', mesh: this.rubbleMesh(T.rub, (Math.random() * 3) | 0), s: sz, k, t: 0 };
       this.ctx.debris.push(d);
       this.rubble.push(d);
     }
-    while (this.rubble.length > 160) { const old = this.rubble.shift(); old.t = 999; }
+    // only when the pile gets enormous do the oldest settled pieces get cleaned up
+    while (this.rubble.length > 900) { const old = this.rubble.shift(); old.t = 999; }
   }
 
-  releasePanel(P, v, why) {
+  releasePanel(P, v, why, frac = 1) {
     if (P.state !== 'fixed') return;
-    const T = TYPES[P.type];
-    this.world.release(P.body, T.mass);
+    this.world.release(P.body, P.mass * frac);
     P.state = 'free';
     P.body.brk = null;
     P.body.report = true;
@@ -362,9 +417,31 @@ export class Structures {
     P._m = new Float32Array(16);
     P.B.checkStab = true;
     P.B.lastWhy = why;
+    if (P.f === 0) this.hazardCheck(P.B, P, why === 'hit' ? 1 : 0.4);
   }
 
   breakCost(P) { return TYPES[P.type].value; }
+
+  // gas cylinder near a wrecked ground-floor panel may go off
+  hazardCheck(B, P, k) {
+    for (const h of B.hazards) {
+      if (h.done) continue;
+      const d = Math.hypot(B.x + P.cx - h.x, B.z + P.cz - h.z);
+      if (d < 4.5 && Math.random() < 0.22 * k) this.gasBlast(B, h);
+    }
+  }
+  gasBlast(B, h) {
+    h.done = true;
+    const pos = [h.x, h.y, h.z];
+    if (this.ctx.blast) this.ctx.blast(pos, 10, 7);
+    this.fires.push({ p: [h.x, 0.6, h.z], t: 0, life: 40 + Math.random() * 25 });
+    // the blast shoves nearby wall panels
+    for (const Q of B.panels) {
+      if (Q.state !== 'fixed') continue;
+      const d = Math.hypot(B.x + Q.cx - h.x, Q.cy - h.y, B.z + Q.cz - h.z);
+      if (d < 8) { Q.hp -= 160e3 * (1 - d / 8) * (1 - d / 8); if (Q.hp <= 0) this.breakPanel(Q, [(B.x + Q.cx - h.x) / (d + 1) * 6, 3, (B.z + Q.cz - h.z) / (d + 1) * 6], 150e3, [0, 0, 0]); else B.dirty = true; }
+    }
+  }
 
   // called from the physics step BEFORE the contact is solved
   preHit(a, b, c) {
@@ -386,10 +463,11 @@ export class Structures {
     if (cb) cb(Math.min(E * 0.004, 4000));
     this.fxAt(P, c.p, E, dir);
     if (this.ctx.sfx && this.soundT <= 0 && E > 20e3) { this.soundT = 0.08; this.ctx.sfx.crash(c.p, clamp(E / 400e3, 0.1, 1), E > 120e3); }
-    // shock to neighbours
-    for (const Q of [P.nbL, P.nbR]) if (Q && Q.state === 'fixed') { Q.hp -= E * 0.18; if (Q.hp <= 0) this.breakPanel(Q, O.v, E * 0.3, dir); }
-    for (const Q of P.above) if (Q.state === 'fixed') Q.hp -= E * 0.06;
-    for (const Q of P.below) if (Q.state === 'fixed') Q.hp -= E * 0.06;
+    // the shock spreads through bonded neighbours (mortar / concrete): infill takes more than structure
+    const share = P.str ? 0.06 : 0.16;
+    for (const Q of [P.nbL, P.nbR]) if (Q && Q.state === 'fixed') { Q.hp -= E * share; if (Q.hp <= 0) this.breakPanel(Q, O.v, E * 0.3, dir); }
+    for (const Q of P.above) if (Q.state === 'fixed') Q.hp -= E * 0.04;
+    for (const Q of P.below) if (Q.state === 'fixed') Q.hp -= E * 0.04;
     if (P.hp <= 0) this.breakPanel(P, O.v, E, dir);
     else P.B.dirty = true;
     if (cb && P.hp <= 0) cb(this.breakCost(P));
@@ -398,12 +476,12 @@ export class Structures {
   breakPanel(P, vel, E, dir) {
     if (P.state !== 'fixed') return;
     const k = 0.35;
-    this.releasePanel(P, [vel[0] * k, vel[1] * k + 0.5, vel[2] * k], 'hit');
+    this.releasePanel(P, [vel[0] * k, vel[1] * k + 0.5, vel[2] * k], 'hit', 0.55);
     P.body.w = [(Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3];
-    this.spawnRubble(P, [P.body.pos[0], P.body.pos[1], P.body.pos[2]], clamp((E / 120e3) | 0, 2, 6), dir, Math.hypot(vel[0], vel[2]));
+    this.spawnRubble(P, [P.body.pos[0], P.body.pos[1], P.body.pos[2]], P.mass * 0.45, dir, Math.hypot(vel[0], vel[2]));
   }
 
-  // free panel hits something hard: it shatters
+  // free panel hits something hard: it shatters (all of its mass turns into rubble)
   onImpact(e) {
     for (const b of [e.a, e.b]) {
       const P = b.panel;
@@ -412,7 +490,7 @@ export class Structures {
       if (e.speed > 4.5 && E > P.maxHp * 0.55) {
         const dir = [b.v[0] * 0.1, 0, b.v[2] * 0.1];
         this.fxAt(P, e.p, E * 1.4, dir);
-        this.spawnRubble(P, [b.pos[0], b.pos[1], b.pos[2]], 5 + ((Math.random() * 3) | 0), dir, Math.hypot(b.v[0], b.v[2]));
+        this.spawnRubble(P, [b.pos[0], b.pos[1], b.pos[2]], b.mass, dir, Math.hypot(b.v[0], b.v[2]));
         if (this.ctx.sfx && this.soundT <= 0) { this.soundT = 0.08; this.ctx.sfx.crash(b.pos, clamp(E / 500e3, 0.15, 1), true); }
         const cb = this.ctx.onProp; if (cb) cb(this.breakCost(P) * 0.5);
         this.world.remove(b);
@@ -423,27 +501,42 @@ export class Structures {
     }
   }
 
-  // which fixed panels are still carried?
+  // load path: which fixed panels are still carried? Columns / bearing walls pass load down through slabs;
+  // a slab needs most of its supports; infill walls only need a stable slab above or below.
   checkStability(B) {
-    const stable = new Set(), q = [];
-    for (const P of B.panels) { P.sd = 0; if (P.state === 'fixed' && P.y0 < 0.05) { stable.add(P); q.push(P); } }
-    const hold = (X) => {
-      if (X.state !== 'fixed' || stable.has(X)) return;
-      stable.add(X); q.push(X);
-    };
-    while (q.length) {
-      const P = q.pop();
-      for (const A of P.above) if (A.state === 'fixed' && !stable.has(A) && A.below.some((s) => stable.has(s))) hold(A);
-      for (const L of P.lat) if (L.state === 'fixed' && !stable.has(L)) {
-        const ns = L.lat.filter((n) => stable.has(n));
-        const dd = Math.min(...ns.map((n) => n.sd || 0)) + 1;
-        if (ns.length >= 2 && dd <= 1) { L.sd = dd; hold(L); }
+    const stable = new Set();
+    for (const P of B.panels) { if (P.state === 'fixed' && P.y0 < 0.05) stable.add(P); }
+    const fixed = B.panels.filter((P) => P.state === 'fixed' && P.y0 >= 0.05);
+    let changed = true, guard = 0;
+    while (changed && guard++ < 40) {
+      changed = false;
+      for (const P of fixed) {
+        if (stable.has(P)) continue;
+        let ok = false;
+        if (P.kind === 'slab') {
+          const sup = P.below.filter((q) => q.str);
+          const nS = sup.length;
+          const live = sup.filter((q) => stable.has(q));
+          const nOK = live.length;
+          const need = nS <= 2 ? nS : Math.ceil(nS * (B.sys === 'masonry' ? 0.65 : 0.5));
+          // enough supports AND spread around the bay (a slab held only along one edge peels off)
+          const ex = P.hx * 0.4, ez = P.hz * 0.4;
+          const spread = live.some((q) => q.cx <= P.cx - ex) && live.some((q) => q.cx >= P.cx + ex) && live.some((q) => q.cz <= P.cz - ez) && live.some((q) => q.cz >= P.cz + ez);
+          ok = nS > 0 && nOK >= need && (spread || nS <= 2);
+        } else if (P.str) {
+          ok = P.below.some((q) => stable.has(q));
+        } else {
+          ok = P.below.some((q) => stable.has(q)) || P.above.some((q) => stable.has(q) && q.kind === 'slab');
+        }
+        if (ok) { stable.add(P); changed = true; }
       }
-      for (const X of [P.nbL, P.nbR]) if (X && X.state === 'fixed' && !stable.has(X) && X.nbL && X.nbR && stable.has(X.nbL) && stable.has(X.nbR) && X.kind === 'wall') hold(X);
     }
     let lost = 0;
     const t = this.ctx.time;
-    for (const P of B.panels) if (P.state === 'fixed' && !stable.has(P) && !P.releaseAt) { P.releaseAt = t + 0.08 + Math.random() * 0.55 + P.f * 0.04; lost++; }
+    for (const P of fixed) if (!stable.has(P) && !P.releaseAt) {
+      // failure wave: panels right above the damage let go first, then the rest of the building follows
+      P.releaseAt = t + 0.1 + Math.random() * 0.4 + P.f * 0.05; lost++;
+    }
     if (lost && !B.collapseNoted) { B.collapseNoted = true; if (this.ctx.onCollapse) this.ctx.onCollapse(B); }
     return lost;
   }
@@ -467,13 +560,10 @@ export class Structures {
           B.checkStab = true;
         }
       }
-      // serious structural failure starts a fire (only after a real collapse, not for a dent)
-      if (!B.fireStarted && B.freed > B.panels.length * 0.3 && B.lastWhy === 'collapse') {
-        B.fireStarted = true;
-        if (Math.random() < 0.8) for (let i = 0; i < 2; i++) {
-          const P = B.panels[(Math.random() * B.panels.length) | 0];
-          this.fires.push({ p: [B.x + P.cx, 0.6, B.z + P.cz], t: 0, life: 30 + Math.random() * 20 });
-        }
+      // a big collapse can rupture a gas cylinder; plain masonry / concrete never burns by itself
+      if (!B.gasCollapse && B.freed > B.panels.length * 0.25 && B.lastWhy === 'collapse') {
+        B.gasCollapse = true;
+        for (const h of B.hazards) if (!h.done && Math.random() < 0.7) setTimeout(() => this.gasBlast(B, h), 300 + Math.random() * 1500);
       }
       if (B.dirty) { B.rebuildT -= dt; if (B.rebuildT <= 0) { this.rebuild(B); B.rebuildT = 0.12; } }
     }

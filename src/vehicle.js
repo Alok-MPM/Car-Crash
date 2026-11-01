@@ -129,6 +129,30 @@ export class Vehicle {
     return 0.25 + 0.75 * clamp(this.health.engine, 0, 1);
   }
 
+  // A missing wheel leaves the hub / brake disc / strut hanging ~0.55R above the road. It only touches asphalt when the
+  // corner is loaded (cornering towards that side, braking): then it drags with metal-on-asphalt friction and throws sparks.
+  stubContact(w, dt) {
+    const b = this.body, R = b.R, m = w.mount;
+    const o = [b.pos[0] + R[0] * m[0] + R[3] * m[1] + R[6] * m[2], b.pos[1] + R[1] * m[0] + R[4] * m[1] + R[7] * m[2], b.pos[2] + R[2] * m[0] + R[5] * m[1] + R[8] * m[2]];
+    const rs = w.R * 0.5;
+    w.stubOn = false;
+    const hit = this.world.raycastStatic(o, [0, -1, 0], w.L0 + rs);
+    if (!hit) return;
+    const depth = (w.L0 + rs) - hit.t; // hub hangs at full droop; it touches only when the corner has sagged enough
+    if (depth <= 0) return;
+    const cp = [o[0], o[1] - hit.t, o[2]];
+    const tmp = [0, 0, 0];
+    b.velAt(cp[0], cp[1], cp[2], tmp);
+    const k = (this.P.kF + this.P.kR) * 1.2;
+    const Fn = Math.min(k * depth + Math.max(0, -tmp[1]) * (this.P.cF + this.P.cR), this.spec.kg * G * 1.5);
+    b.applyForce(0, Fn, 0, cp[0], cp[1], cp[2]);
+    const vh = Math.hypot(tmp[0], tmp[2]);
+    if (vh > 0.3) {
+      const mu = 0.42, Ff = Math.min(mu * Fn, (this.spec.kg * 0.5 * vh) / dt);
+      b.applyForce(-tmp[0] / vh * Ff, 0, -tmp[2] / vh * Ff, cp[0], cp[1], cp[2]);
+    }
+    w.stubOn = true; w.stubF = Fn; w.stubV = vh; w.stubP = cp;
+  }
   step(dt) {
     const b = this.body, P = this.P, s = this.spec, g = s.geo;
     if (b.sleeping) return;
@@ -240,7 +264,7 @@ export class Vehicle {
       w.FnPrev = w.Fn;
       w.FmaxPrev = w.Fmax || 0;
       w.Fn = 0;
-      if (w.detached) { w.susp = w.L0; continue; }
+      if (w.detached) { w.susp = w.L0; this.stubContact(w, dt); continue; }
       const m = w.mount;
       origin[0] = b.pos[0] + R[0] * m[0] + R[3] * m[1] + R[6] * m[2];
       origin[1] = b.pos[1] + R[1] * m[0] + R[4] * m[1] + R[7] * m[2];
