@@ -109,6 +109,7 @@ export class Car {
     this.cost = 0;
     this.fire = 0;
     this.burnt = 0;
+    this.heat = 0; this.leak = false; this.engRear = /rear|mid/i.test(spec.tag || '');
     this.wrecked = false;
     this.glassGone = {};
     this.smokeT = 0;
@@ -170,10 +171,11 @@ export class Car {
     // mechanical damage
     const L = this.spec.geo.L;
     const front = pl[2] < -L * 0.18, rear = pl[2] > L * 0.18;
-    if (front && depth > 0.1) {
-      this.vehicle.health.engine = clamp(this.vehicle.health.engine - depth * 0.55, 0, 1);
-      this.vehicle.health.radiator = clamp(this.vehicle.health.radiator - depth * 0.9, 0, 1);
-    }
+    const engHit = this.engRear ? rear : front;
+    if (engHit && depth > 0.1) this.vehicle.health.engine = clamp(this.vehicle.health.engine - depth * 0.55, 0, 1);
+    if (front && depth > 0.1) this.vehicle.health.radiator = clamp(this.vehicle.health.radiator - depth * 0.9, 0, 1);
+    // fuel tank sits behind the seats / low in the middle: a hard hit there can open a leak
+    if (!this.leak && depth > 0.3 && Math.abs(pl[2]) > L * 0.3 && this.rng() < 0.35) this.leak = true;
     if (depth > 0.18 && Math.abs(pl[2]) > L * 0.2) this.vehicle.health.steerBias += (this.rng() - 0.5) * depth * 0.08;
     // wheels
     this.vehicle.wheels.forEach((w, i) => {
@@ -362,7 +364,6 @@ export class Car {
   wreck() {
     this.wrecked = true;
     // most wrecks only smoke; a fuel leak that ignites is the exception
-    if (this.rng() < 0.3) { this.fire = 0.01; this.leak = this.rng() < 0.4; }
   }
 
   // ---------- per frame ----------
@@ -382,17 +383,26 @@ export class Car {
     if (fx && !this.dead) {
       const fwd = [-b.R[6], -b.R[7], -b.R[8]];
       const hoodP = b.toWorld([0, 0.25, -this.spec.geo.L * 0.38]);
-      if (he < 0.4) {
-        this.smokeT -= dt;
-        const rate = lerp(0.35, 0.07, clamp((0.4 - he) / 0.4, 0, 1));
-        if (this.smokeT <= 0) { this.smokeT = rate; const dark = he < 0.35; fx.smoke(hoodP, [b.v[0] * 0.3 + (Math.random() - 0.5), 1.2 + Math.random(), b.v[2] * 0.3 + (Math.random() - 0.5)], 0.4 + (1 - he) * 0.5, 1.4 + Math.random() * 0.8, dark ? [0.05, 0.05, 0.05] : [0.6, 0.6, 0.6], dark ? 0.55 : 0.3); }
-      }
+      const engZ = this.engRear ? this.spec.geo.L * 0.62 : this.spec.geo.L * 0.38;
+      const engP = b.toWorld([0, 0.25, this.engRear ? engZ - this.spec.geo.L * 0.5 : -this.spec.geo.L * 0.38]);
+      // overheating: broken radiator + running engine -> steam, then the engine catches fire
+      const rad = v.health.radiator;
+      if (rad < 0.35 && this.fire === 0 && he > 0.02) {
+        this.heat += dt * (0.35 - rad) / 0.35 * (0.25 + v.in.throttle);
+        if (this.heat > 1.5) {
+          this.smokeT -= dt;
+          if (this.smokeT <= 0) { this.smokeT = 0.2; fx.smoke(engP, [(Math.random() - 0.5) * 0.6, 1 + Math.random(), (Math.random() - 0.5) * 0.6], 0.3 + Math.random() * 0.2, 1.2, [0.75, 0.75, 0.75], 0.12); }
+        }
+        if (this.heat > 9) { this.fire = 0.01; this.leak = false; }
+      } else if (this.heat > 0) this.heat = Math.max(0, this.heat - dt * 0.2);
+      // leaking fuel + moving/scraping car can ignite
+      if (this.leak && this.fire === 0 && v.speed > 4 && Math.random() < dt * 0.05) this.fire = 0.01;
       if (this.fire > 0) {
         this.fire += dt;
         this.burnt = clamp(this.fire / 25, 0, 1);
         if (this.fire > 16 && !this.leak) { this.fire = -1; }
-        for (let i = 0; i < 2; i++) fx.fire(b.toWorld([(Math.random() - 0.5) * 1.0, 0.35, -this.spec.geo.L * 0.3 + (Math.random() - 0.5) * 0.8]), [(Math.random() - 0.5) * 0.8, 1.5 + Math.random() * 1.5, (Math.random() - 0.5) * 0.8], 0.4 + Math.random() * 0.4);
-        if (Math.random() < 0.25) fx.smoke(b.toWorld([0, 0.7, -0.6]), [0, 2.2, 0], 0.9 + Math.random(), 2.5, [0.04, 0.04, 0.04], 0.75);
+        for (let i = 0; i < 2; i++) fx.fire(b.toWorld([(Math.random() - 0.5) * 1.0, 0.35, (this.engRear ? this.spec.geo.L * 0.12 : -this.spec.geo.L * 0.3) + (Math.random() - 0.5) * 0.8]), [(Math.random() - 0.5) * 0.8, 1.5 + Math.random() * 1.5, (Math.random() - 0.5) * 0.8], 0.4 + Math.random() * 0.4);
+        if (Math.random() < 0.08) fx.smoke(b.toWorld([0, 0.7, this.engRear ? 1 : -0.6]), [0, 2.2, 0], 0.5 + Math.random() * 0.4, 2, [0.05, 0.05, 0.05], 0.3);
         this.ctx.r.addLight && this.ctx.r.addLight(hoodP[0], hoodP[1] + 0.5, hoodP[2], 9, 1.6, 0.6, 0.2);
         if (this.fire > 11 && this.leak && !this.exploded && this.ctx.explosions) this.explode();
       }

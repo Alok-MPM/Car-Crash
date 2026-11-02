@@ -22,6 +22,7 @@ export class Structures {
     this.mat0 = null;
     this.freeMeshes = new Map();
     this.rubbleMeshes = new Map();
+    this.shatterQ = [];
     this.rubble = [];
     this.fires = [];
     this.soundT = 0;
@@ -218,7 +219,7 @@ export class Structures {
   spawnRubble(P, p, totalMass, dir, speed) {
     const B = P.B, world = this.world;
     const L = this.rubble.length;
-    const lod = L < 150 ? 1 : L < 300 ? 0.5 : L < 450 ? 0.25 : 0;
+    const ld = this.ctx.load || 1, lod = (L < 150 ? 1 : L < 300 ? 0.5 : L < 450 ? 0.25 : 0) * (0.5 + 0.5 * ld);
     const pcs = [];
     const frac = totalMass / P.mass;
     const plasterM = P.plasterMass * frac;
@@ -263,11 +264,12 @@ export class Structures {
       body.v = [dir[0] * speed * 0.4 + (Math.random() - 0.5) * 4, 1 + Math.random() * 3, dir[2] * speed * 0.4 + (Math.random() - 0.5) * 4];
       body.w = [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8];
       world.add(body);
-      const d = { body, kind: 'rubble', mesh: this.rubbleMesh(c.tile, c.tint, c.dims), s: 1, t: 0 };
+      const d = { body, kind: 'rubble', mesh: this.rubbleMesh(c.tile, c.tint, c.dims), s: 1, t: 0, tile: c.tile, tint: c.tint, dims: c.dims, dens: c.dens, m: c.m, gen: c.gen || 0 };
+      body.rub = d;
       this.ctx.debris.push(d);
       this.rubble.push(d);
     }
-    while (this.rubble.length > 900) { const old = this.rubble.shift(); old.t = 999; }
+    while (this.rubble.length > 900 * (this.ctx.load || 1)) { const old = this.rubble.shift(); old.t = 999; }
   }
 
   releasePanel(P, v, why, frac = 1) {
@@ -289,13 +291,30 @@ export class Structures {
     if (P.f === 0) this.hazardCheck(P.B, P, why === 'hit' ? 1 : 0.4);
   }
 
+  // a person standing at a closed door can open it (the door leaf is taken out of the wall; no damage, no rubble)
+  openDoorNear(p, R) {
+    for (const B of this.list) {
+      if (Math.hypot(B.x - p[0], B.z - p[2]) > (B.radius || 30) + 4) continue;
+      for (const P of B.panels) {
+        if (P.kind !== 'door' || P.state !== 'fixed') continue;
+        if (Math.hypot(B.x + P.cx - p[0], B.z + P.cz - p[2]) > R) continue;
+        if (Math.abs((P.y0 + P.y1) / 2 - p[1]) > 2.2) continue;
+        this.world.remove(P.body);
+        P.state = 'open';
+        B.dirty = true;
+        return true;
+      }
+    }
+    return false;
+  }
+
   breakCost(P) { return P.mat === 'glass' ? 400 : P.mat === 'wood' ? 300 : P.kind === 'slab' ? 2500 : P.mat === 'rcc' ? 1800 : 700; }
 
   hazardCheck(B, P, k) {
     for (const h of B.hazards) {
       if (h.done) continue;
       const d = Math.hypot(B.x + P.cx - h.x, B.z + P.cz - h.z);
-      if (d < 4.5 && Math.random() < 0.22 * k) this.gasBlast(B, h);
+      if (d < 1.6 && k >= 1 && Math.random() < 0.3) this.gasBlast(B, h);   // only a direct hard hit on the cylinder itself
     }
   }
   gasBlast(B, h) {
@@ -359,6 +378,9 @@ export class Structures {
 
   onImpact(e) {
     for (const b of [e.a, e.b]) {
+      const R = b.rub;
+      // secondary fracture: a hard landing / hit splits a chunk into smaller, irregular pieces (mass conserved)
+      if (R && !R.dead && R.gen < 2 && R.m > 4 && e.speed > 5.5 && R.tile !== T.metal && Math.random() < 0.5 + e.speed * 0.02) { R.dead = true; this.shatterQ.push({ R, speed: e.speed, p: e.p }); }
       const P = b.panel;
       if (!P || P.state !== 'free') continue;
       const E = 0.5 * b.mass * e.speed * e.speed;
@@ -429,7 +451,44 @@ export class Structures {
     return B;
   }
 
+  processShatter() {
+    let budget = 6;
+    while (this.shatterQ.length && budget-- > 0) {
+      const { R, speed } = this.shatterQ.shift();
+      const ob = R.body;
+      if (R.t >= 999) continue;
+      const parts = 2 + ((Math.random() * (R.m > 30 ? 3 : 2)) | 0);
+      const ld = this.ctx.load || 1;
+      const n = Math.max(2, Math.round(parts * (0.5 + 0.5 * ld)));
+      // split along the longest axis into unequal slabs, each squashed differently so no two pieces look alike
+      let w = Array.from({ length: n }, () => 0.5 + Math.random());
+      const sw = w.reduce((a, b) => a + b, 0); w = w.map((x) => x / sw);
+      const ax = R.dims[0] >= R.dims[1] && R.dims[0] >= R.dims[2] ? 0 : R.dims[1] >= R.dims[2] ? 1 : 2;
+      for (let i = 0; i < n; i++) {
+        const m = R.m * w[i];
+        const dims = R.dims.slice();
+        dims[ax] *= w[i];
+        const o = (ax + 1 + ((Math.random() * 2) | 0)) % 3;
+        dims[o] *= 0.55 + Math.random() * 0.5;
+        const vol = dims[0] * dims[1] * dims[2];
+        const k = Math.cbrt(m / (R.dens * vol));          // keep density: volume follows mass
+        const dd = dims.map((q) => Math.max(0.02, q * k));
+        const body = new Body({ mass: Math.max(0.05, m), pos: [ob.pos[0] + (Math.random() - 0.5) * R.dims[0] * 0.6, ob.pos[1] + (Math.random() - 0.5) * 0.2 + 0.05, ob.pos[2] + (Math.random() - 0.5) * R.dims[2] * 0.6], q: ob.q.slice(), fric: 0.75, rest: 0.12, group: GROUP.DEBRIS, mask: GROUP.STATIC | GROUP.PROP | GROUP.DEBRIS | GROUP.CAR, angDamp: 0.25 });
+        body.addBox([dd[0] / 2, dd[1] / 2, dd[2] / 2]);
+        body.v = [ob.v[0] * 0.6 + (Math.random() - 0.5) * speed * 0.5, Math.abs(ob.v[1]) * 0.3 + Math.random() * speed * 0.25, ob.v[2] * 0.6 + (Math.random() - 0.5) * speed * 0.5];
+        body.w = [(Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9];
+        this.world.add(body);
+        const d = { body, kind: 'rubble', mesh: this.rubbleMesh(R.tile, R.tint, dd), s: 1, t: 0, tile: R.tile, tint: R.tint, dims: dd, dens: R.dens, m, gen: R.gen + 1 };
+        body.rub = d;
+        this.ctx.debris.push(d); this.rubble.push(d);
+      }
+      if (this.ctx.fx) this.ctx.fx.chip(ob.pos, [(Math.random() - 0.5) * 4, 1 + Math.random() * 2, (Math.random() - 0.5) * 4], '#c9b79c');
+      R.t = 999;
+    }
+  }
+
   update(dt) {
+    if (this.shatterQ.length) this.processShatter();
     this.soundT -= dt;
     const t = this.ctx.time, fx = this.ctx.fx;
     for (const B of this.list) {
@@ -440,16 +499,12 @@ export class Structures {
           const o = P.out || [0, 0];
           this.releasePanel(P, [o[0] * 0.8 + (Math.random() - 0.5) * 0.6, -0.5, o[1] * 0.8 + (Math.random() - 0.5) * 0.6], 'collapse');
           P.body.w = [(Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 1.2];
-          if (fx && B.collapseDust < 22) {
+          if (fx && B.collapseDust < 6) {
             B.collapseDust++;
             fx.smoke([B.x + P.cx, Math.max(1, P.cy), B.z + P.cz], [(Math.random() - 0.5) * 2, 0.6, (Math.random() - 0.5) * 2], 1.2 + Math.random() * 1.2, 2.5 + Math.random() * 2, [0.5, 0.47, 0.43], 0.07);
           }
           B.checkStab = true;
         }
-      }
-      if (!B.gasCollapse && B.hazards.length && B.freed > B.panels.length * 0.25 && B.lastWhy === 'collapse') {
-        B.gasCollapse = true;
-        for (const h of B.hazards) if (!h.done && Math.random() < 0.7) setTimeout(() => this.gasBlast(B, h), 300 + Math.random() * 1500);
       }
       if (B.dirty) { B.rebuildT -= dt; if (B.rebuildT <= 0) { this.rebuild(B); B.rebuildT = 0.12; } }
     }
@@ -460,7 +515,7 @@ export class Structures {
       if (fx) {
         const k = 1 - f.t / f.life;
         if (Math.random() < 0.7 * k) fx.fire([f.p[0] + (Math.random() - 0.5) * 2, f.p[1] + Math.random(), f.p[2] + (Math.random() - 0.5) * 2], [(Math.random() - 0.5) * 0.6, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 0.6], 0.8 + Math.random() * 0.9);
-        if (Math.random() < 0.35) fx.smoke([f.p[0], f.p[1] + 2, f.p[2]], [(Math.random() - 0.5), 3 + Math.random() * 2, (Math.random() - 0.5)], 1.6 + Math.random() * 2, 4 + Math.random() * 3, [0.05, 0.05, 0.05], 0.55);
+        if (Math.random() < 0.12) fx.smoke([f.p[0], f.p[1] + 2, f.p[2]], [(Math.random() - 0.5), 3 + Math.random() * 2, (Math.random() - 0.5)], 1.0 + Math.random(), 3 + Math.random() * 2, [0.08, 0.08, 0.08], 0.25);
       }
     }
   }

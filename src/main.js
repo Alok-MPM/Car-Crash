@@ -3,6 +3,7 @@ import { Renderer } from './core/gfx.js';
 import { World, GROUP } from './core/physics.js';
 import { CARS, getCar } from './engines/cars/cars.js';
 import { Car, drawDebris } from './engines/cars/car.js';
+import { Person } from './engines/people/person.js';
 import { Scene } from './engines/land/world.js';
 import { FX } from './core/fx.js';
 import { Sfx } from './core/audio.js';
@@ -15,7 +16,7 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 if (isTouch) document.documentElement.classList.add('touch');
 
 // ---------- persisted settings ----------
-const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, units: 'kmh', tilt: 0, sound: 1 };
+const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1 };
 let S = { ...defaults };
 try { Object.assign(S, JSON.parse(localStorage.getItem('crashyard') || '{}')); } catch (e) {}
 const save = () => { try { localStorage.setItem('crashyard', JSON.stringify(S)); } catch (e) {} };
@@ -64,7 +65,7 @@ function applyQuality() {
   r.setShadowSize(q === 2 ? 2048 : q === 1 ? 1024 : 0);
   r.shadowRadius = q === 2 ? 55 : 42;
   r.dprScale = [0.6, 0.85, 1][q];
-  fx.quality = [0.35, 0.7, 1][q];
+  fx.quality = [0.35, 0.7, 1][q] * (ctx.load || 1);
   resize();
 }
 function resize() { r.resize(window.innerWidth, window.innerHeight); }
@@ -164,6 +165,24 @@ const keys = {};
 const inp = { throttle: 0, brake: 0, steer: 0, hb: 0 };
 let kbThr = 0, kbBrk = 0, pedThr = 0, pedBrk = 0, steerKb = 0, tiltSteer = 0, touchSteer = 0, touchGas = 0, touchBrk = 0, touchHb = 0, touchHorn = 0;
 let horn = false;
+const person = new Person(ctx);
+function toggleWalk() {
+  if (menuOpen) return;
+  const c = player, b = c.body;
+  if (!person.active) {
+    if (c.vehicle.speed > 2.5) { toast('Stop the car first', ''); return; }
+    const g = c.spec.geo;
+    const p = b.toWorld([-(g.W / 2 + 0.7), 0, -g.L * 0.1]);
+    person.spawn([p[0], 0.05, p[2]], camYaw);
+    toast('Walking - W/S move, A/D turn, Space run, H jump, F: door / car', '');
+    return;
+  }
+  // walking: nearest closed door first, then the car
+  if (scene.structures.openDoorNear && scene.structures.openDoorNear(person.feet, 2.2)) { toast('Door opened', ''); return; }
+  const d = dist3(person.body.pos, b.pos);
+  if (d < 4.2 + c.spec.geo.L * 0.3) { person.despawn(); toast('Back in the car', ''); } else toast('Walk to your car, or stand at a door and press F', '');
+}
+addEventListener('keydown', (e) => { if (e.code === 'KeyF' && !e.repeat) toggleWalk(); });
 addEventListener('keydown', (e) => {
   if (e.repeat) { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault(); return; }
   keys[e.code] = true;
@@ -288,6 +307,18 @@ addEventListener('wheel', (e) => { orbitDist = clamp(orbitDist * (1 + Math.sign(
 const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
 
 function updateCamera(dt) {
+  if (person.active && person.body) {
+    const pp = person.body.pos;
+    camYaw += angDiff(person.yaw, camYaw) * (1 - Math.exp(-dt * 4));
+    camFov += (62 - camFov) * (1 - Math.exp(-dt * 3));
+    const hd = [-Math.sin(camYaw) * 3.6, 0.35, -Math.cos(camYaw) * 3.6], hl = Math.hypot(hd[0], hd[1], hd[2]);
+    const o = [pp[0], pp[1] + 0.9, pp[2]], dn = [hd[0] / hl, hd[1] / hl, hd[2] / hl];
+    const hit = world.raycastStatic(o, dn, hl + 0.3);      // pull the camera in when a wall is behind the person
+    const k = hit ? Math.max(0.5, hit.t - 0.3) / hl : 1;
+    const eye = [o[0] + hd[0] * Math.min(1, k), o[1] + hd[1] * Math.min(1, k), o[2] + hd[2] * Math.min(1, k)];
+    camPos = eye; camLook = [pp[0] + Math.sin(camYaw) * 3, pp[1] + 0.55, pp[2] + Math.cos(camYaw) * 3];
+    return;
+  }
   const c = player;
   const b = c.body, g = c.spec.geo;
   const R = b.R;
@@ -565,12 +596,13 @@ function syncMenu() {
   seg('segAssist', 'assist', () => player && (player.vehicle.assist = S.assist));
   seg('segTod', 'tod', () => r.setTOD(S.tod));
   seg('segQ', 'quality', applyQuality);
+  seg('segFps', 'fps', () => { ctx.load = 1; });
   seg('segU', 'units');
   seg('segTilt', 'tilt', () => { if (S.tilt && window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); });
 }
 function toggleMenu() { menuOpen = !menuOpen; $('menu').classList.toggle('hidden', !menuOpen); if (menuOpen) { orbitYaw = camYaw + Math.PI + 0.5; } }
 $('go').onclick = () => { sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
-$('bMenu').onclick = toggleMenu; $('bCam').onclick = cycleCam; $('bRep').onclick = repair; $('bSpawn').onclick = spawnAhead; $('bTod').onclick = nextTod; $('bSlow').onclick = toggleSlow; $('bSnd').onclick = toggleSound;
+$('bWalk').onclick = toggleWalk; $('bMenu').onclick = toggleMenu; $('bCam').onclick = cycleCam; $('bRep').onclick = repair; $('bSpawn').onclick = spawnAhead; $('bTod').onclick = nextTod; $('bSlow').onclick = toggleSlow; $('bSnd').onclick = toggleSound;
 
 // ---------- frame loop ----------
 const H = 1 / 120;
@@ -592,17 +624,31 @@ function stepPhysics(real) {
 function frame(t) {
   requestAnimationFrame(frame);
   const now = t / 1000;
+  const tgt = S.fps || 0;                       // user's target FPS (0 = unlimited)
+  if (tgt && now - last < 1 / tgt - 0.003) return;   // frame cap: saves heat + battery
   let dt = Math.min(0.05, now - last); last = now;
   if (!player) return;
   fpsAvg = fpsAvg * 0.95 + dt * 1000 * 0.05;
-  // adaptive resolution
-  if (fpsAvg > 26) { lowT += dt; highT = 0; } else if (fpsAvg < 17) { highT += dt; lowT = 0; } else { lowT = highT = 0; }
-  if (lowT > 2.5 && r.dprScale > 0.5) { r.dprScale = Math.max(0.5, r.dprScale - 0.1); resize(); lowT = 0; }
-  if (highT > 4 && r.dprScale < [0.6, 0.85, 1][S.quality]) { r.dprScale = Math.min([0.6, 0.85, 1][S.quality], r.dprScale + 0.05); resize(); highT = 0; }
+  // load governor: when the frame rate drops under the target, shed detail (particles, rubble, resolution) in steps; recover when there is headroom
+  const goal = tgt || 60, fpsNow = 1000 / Math.max(fpsAvg, 1);
+  if (fpsNow < goal * 0.85) { lowT += dt; highT = 0; } else if (fpsNow > goal * 0.97) { highT += dt; lowT = 0; } else { lowT = highT = 0; }
+  const load = ctx.load === undefined ? 1 : ctx.load;
+  if (lowT > 1.2) {
+    lowT = 0;
+    if (load > 0.3) { ctx.load = Math.max(0.3, load - 0.15); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
+    else if (r.dprScale > 0.5) { r.dprScale = Math.max(0.5, r.dprScale - 0.1); resize(); }
+  }
+  if (highT > 5) {
+    highT = 0;
+    const dm = [0.6, 0.85, 1][S.quality];
+    if (r.dprScale < dm) { r.dprScale = Math.min(dm, r.dprScale + 0.05); resize(); }
+    else if (load < 1) { ctx.load = Math.min(1, load + 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
+  }
   soundBudget = 5;
   scrape = 0;
   readInput(dt);
-  if (menuOpen) { player.vehicle.in.throttle = 0; player.vehicle.in.brake = 0.4; player.vehicle.in.steer = 0; player.vehicle.in.handbrake = 1; }
+  if (person.active && !menuOpen) { person.update(dt, { fwd: inp.throttle - inp.brake, turn: inp.steer, run: inp.hb, jump: horn }); const vi = player.vehicle.in; vi.throttle = 0; vi.brake = 0.5; vi.steer = 0; vi.handbrake = 1; }
+  else if (menuOpen) { player.vehicle.in.throttle = 0; player.vehicle.in.brake = 0.4; player.vehicle.in.steer = 0; player.vehicle.in.handbrake = 1; }
   else { const vi = player.vehicle.in; vi.throttle = inp.throttle; vi.brake = inp.brake; vi.steer = inp.steer; vi.handbrake = inp.hb; vi.reverse = reverseOn; }
   if (slowT > 0) slowT -= dt;
   stepPhysics(dt);
@@ -666,6 +712,7 @@ function frame(t) {
   fx.beginBlobs();
   scene.draw(camPos);
   for (const c of cars) c.draw();
+  person.draw();
   for (const d of deb) drawDebris(ctx, d);
   fx.collect(r);
   // lights
@@ -684,12 +731,13 @@ async function boot() {
   r.setTOD(S.tod);
   ctx.onProp = (v) => { propDmg += v; };
   scene = new Scene(ctx, { density: S.quality === 0 ? 0.6 : 1 });
+  ctx.scene = scene;
   world.preHit = (a, b, c) => scene.structures.preHit(a, b, c);
   makePlayer(false);
   populateNPCs();
   syncMenu();
   $('loading').style.display = 'none';
   requestAnimationFrame((t) => { last = t / 1000; frame(t); });
-  window.__game = { orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
+  window.__game = { person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
 }
 setTimeout(() => { boot().catch((e) => { console.error(e); $('loading').innerHTML = '<div style="padding:24px;text-align:center">Failed to start: ' + String(e.message || e).slice(0, 300) + '</div>'; }); }, 30);

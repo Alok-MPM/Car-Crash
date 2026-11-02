@@ -105,7 +105,7 @@ label.t{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(-
   <div id="gaugeWrap"><canvas id="gauge" width="660" height="400"></canvas></div>
   <div id="toast"></div>
   <div id="topbtns">
-    <button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
+    <button id="bWalk">Walk (F)</button><button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
   </div>
   <div id="hint"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive &nbsp; <kbd>Space</kbd> handbrake &nbsp; <kbd>C</kbd> camera<br><kbd>Q</kbd> reverse &nbsp; <kbd>R</kbd> flip upright &nbsp; <kbd>E</kbd> repair &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>Esc</kbd> garage</div>
 </div>
@@ -134,6 +134,8 @@ label.t{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(-
       <div class="seg" id="segTod"><button data-v="day">Noon</button><button data-v="golden">Sunset</button><button data-v="overcast">Overcast</button><button data-v="night">Night</button></div>
       <label class="t">Quality</label>
       <div class="seg" id="segQ"><button data-v="0">Low</button><button data-v="1">Medium</button><button data-v="2">High</button></div>
+      <label class="t">Target FPS</label>
+      <div class="seg" id="segFps"><button data-v="30">30</button><button data-v="45">45</button><button data-v="60">60</button><button data-v="0">Max</button></div>
       <label class="t">Units</label>
       <div class="seg" id="segU"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></div>
       <label class="t">Steering</label>

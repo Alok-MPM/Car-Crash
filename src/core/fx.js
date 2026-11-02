@@ -46,7 +46,7 @@ export class FX {
   explosion(p) {
     this.flash = 1;
     for (let i = 0; i < 70; i++) { const a = Math.random() * 6.28, e = Math.random() * 3.14 - 0.5, sp = 2 + Math.random() * 9; this.fire([p[0], p[1] + 0.5, p[2]], [Math.cos(a) * Math.cos(e) * sp, Math.sin(e) * sp + 3, Math.sin(a) * Math.cos(e) * sp], 1.2 + Math.random() * 1.6); }
-    for (let i = 0; i < 40; i++) { const a = Math.random() * 6.28, sp = 1 + Math.random() * 6; this.smoke([p[0], p[1] + 1, p[2]], [Math.cos(a) * sp, 2 + Math.random() * 5, Math.sin(a) * sp], 2 + Math.random() * 2.5, 3 + Math.random() * 3, [0.06, 0.06, 0.06], 0.8); }
+    for (let i = 0; i < 10; i++) { const a = Math.random() * 6.28, sp = 1 + Math.random() * 4; this.smoke([p[0], p[1] + 1, p[2]], [Math.cos(a) * sp, 2 + Math.random() * 4, Math.sin(a) * sp], 1.2 + Math.random() * 1.2, 2 + Math.random() * 2, [0.08, 0.08, 0.08], 0.35); }
     for (let i = 0; i < 60; i++) { const a = Math.random() * 6.28, sp = 4 + Math.random() * 16; this.spark([p[0], p[1] + 0.6, p[2]], [Math.cos(a) * sp, 4 + Math.random() * 12, Math.sin(a) * sp]); }
   }
 

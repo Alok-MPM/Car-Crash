@@ -325,6 +325,7 @@ void main(){
     a = smoothstep(1., 0.15, r + (n - .5) * 0.55 + (n2 - .5) * 0.2);
     a *= vCol.a;
     c *= (0.75 + 0.5 * n) * (uSkyI * 0.4 + 0.28) * (uSunCol * 0.4 + 0.6);
+    c = pow(c / (1. + c * 0.25), vec3(1./2.2));   // gamma on the straight colour, then premultiply (low alpha stays dark, not glowing)
     outCol = vec4(c * a, a);
   } else if (uMode < 1.5) {
     float n = vn2(p * 2.5 + vSeed * 13. + uTime * 4.);
@@ -339,9 +340,11 @@ void main(){
   } else {
     a = step(r, 0.95) * vCol.a;
     float lit = 0.5 + 0.5 * max(dot(normalize(vec3(p, 0.7)), uSunDir), 0.);
-    outCol = vec4(c * lit * (uSkyI * 0.5 + uSunCol.r * 0.5) * a, a);
+    c = c * lit * (uSkyI * 0.5 + uSunCol.r * 0.5);
+    c = pow(c / (1. + c * 0.25), vec3(1./2.2));
+    outCol = vec4(c * a, a);
   }
-  outCol.rgb = pow(outCol.rgb / (1. + outCol.rgb * 0.25), vec3(1./2.2));
+  if (uMode > 0.5 && uMode < 2.5) outCol.rgb = pow(outCol.rgb / (1. + outCol.rgb * 0.25), vec3(1./2.2));
   float f = 1. - exp(-vDist * uFogD);
   if (uMode < 0.5) outCol = mix(outCol, vec4(uFogCol * outCol.a, outCol.a), clamp(f, 0., 1.) * 0.7);
 }`;
