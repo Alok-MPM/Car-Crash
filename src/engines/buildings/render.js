@@ -157,6 +157,15 @@ export class GeoBuf {
       }
     }
   }
+  // oriented box: built in its own local frame (tiles keep running along `phase` = arc-length position), then rotated by quaternion q and moved to c
+  boxQ(q, c, hx, hy, hz, cfg, off, phase, shade = 1) {
+    const i0 = this.pos.length / 3;
+    this.box(0, 0, 0, hx, hy, hz, cfg, [phase, c[1], 0], shade, false);
+    const [x, y, z, w] = q;
+    const R = [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y), 2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x), 2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)];
+    const rot = (a, i, add) => { const px = a[i * 3], py = a[i * 3 + 1], pz = a[i * 3 + 2]; a[i * 3] = R[0] * px + R[3] * py + R[6] * pz + (add ? add[0] : 0); a[i * 3 + 1] = R[1] * px + R[4] * py + R[7] * pz + (add ? add[1] : 0); a[i * 3 + 2] = R[2] * px + R[5] * py + R[8] * pz + (add ? add[2] : 0); };
+    for (let i = i0; i < this.pos.length / 3; i++) { rot(this.pos, i, [c[0], c[1], c[2]]); rot(this.nrm, i, null); }
+  }
   finish() {
     const g = makeGeo(this.n, this.idx.length);
     g.pos.set(this.pos); g.nrm.set(this.nrm); g.uv.set(this.uv); g.col.set(this.col); g.idx.set(this.idx);

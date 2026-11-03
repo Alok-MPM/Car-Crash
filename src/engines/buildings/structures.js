@@ -4,7 +4,10 @@ import { Body, GROUP } from '../../core/physics.js';
 import { m4, clamp } from '../../core/math.js';
 import { MATERIALS, UNITS } from '../../data/materials.js';
 import { design, capacity } from './engineer.js';
-import { layout } from './layout.js';
+import { layout, mulberry } from './layout.js';
+import { shapeElements } from './shapes.js';
+import { validateBuilding } from './validate.js';
+import { PAINTS } from '../../data/materials.js';
 import { GeoBuf, makeAtlas, T, hexRGB } from './render.js';
 import { RECIPES } from '../../data/recipes.js';
 
@@ -38,15 +41,27 @@ export class Structures {
     const spec = { ...(RECIPES[o.recipe] || {}), ...o };
     const plan = design(spec);
     const seed = o.seed ?? (((o.x * 73856093) ^ (o.z * 19349663)) >>> 0);
-    const lay = layout(plan, { seed });
+    let lay;
+    if (spec.shapes) {
+      // free-form building: elements come from the shape engine (curved walls, domes, spires...), no storey layout
+      const rng = mulberry(seed), el = [];
+      shapeElements(spec.shapes, (e) => { e.id = el.length; el.push(e); return e; });
+      const pk = (a) => a[(rng() * a.length) | 0];
+      let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, y1 = 0;
+      for (const e of el) { const ax = e.ax ?? e.hx, az = e.az ?? e.hz, ay = e.ay ?? e.hy; x0 = Math.min(x0, e.cx - ax); x1 = Math.max(x1, e.cx + ax); z0 = Math.min(z0, e.cz - az); z1 = Math.max(z1, e.cz + az); y1 = Math.max(y1, e.cy + ay); }
+      plan.w = x1 - x0; plan.d = z1 - z0; plan.height = y1; plan.note = 'free-form shapes (' + spec.shapes.length + ' primitives)';
+      lay = { el, rooms: [], furn: [], hazards: [], paint: { out: spec.paint || pk(PAINTS.outer), in: pk(PAINTS.inner), trim: pk(PAINTS.trim) }, gx: [], gz: [], wallH: y1 };
+    } else lay = layout(plan, { seed });
     const B = {
       x: o.x, z: o.z, w: plan.w, d: plan.d, floors: plan.floors, plan, lay, sys: plan.system, panels: [], free: new Set(), dirty: true, mesh: null, intMesh: null, intDirty: true,
       rebuildT: 0, freed: 0, collapseDust: 0, hazards: lay.hazards.map((h) => ({ x: o.x + h.x, y: h.y, z: o.z + h.z, done: false })),
       model: m4.fromTRS(new Float32Array(16), [o.x, 0, o.z], [0, 0, 0, 1], 1),
       paintOut: hexRGB(lay.paint.out), paintIn: hexRGB(lay.paint.in), trim: hexRGB(lay.paint.trim),
     };
-    B.radius = Math.hypot(plan.w, plan.d, plan.floors * plan.storeyH) / 2 + 3;
-    B.cy = (plan.floors * plan.storeyH) / 2;
+    B.spec = o; B.recipe = o.recipe || 'custom';
+    B.radius = Math.hypot(plan.w, plan.d, plan.height || plan.floors * plan.storeyH) / 2 + 3;
+    B.cy = (plan.height || plan.floors * plan.storeyH) / 2;
+    B.indestr = !!spec.indestructible;
     const byId = new Map();
     for (const e of lay.el) byId.set(e.id, this.newPanel(B, e, plan));
     // links stored as panel refs
@@ -81,9 +96,11 @@ export class Structures {
     const P = {
       B, e, kind: e.kind, mat: e.mat, f: e.f, cx: e.cx, cy: e.cy, cz: e.cz, hx: e.hx, hy: e.hy, hz: e.hz, str: !!e.str, out: e.out, interior: !!e.interior,
       hp: info.cap, maxHp: info.cap, mass: info.mass, plasterMass: info.plasterMass, state: 'fixed', below: [], above: [], lat: [], nL: [], nR: [],
-      y0: e.cy - e.hy, y1: e.cy + e.hy, body: null, lastO: 0, lastT: -1, releaseAt: 0, cant: e.cant != null, run: e.run, s0: e.s0, s1: e.s1,
+      ax: e.ax ?? e.hx, ay: e.ay ?? e.hy, az: e.az ?? e.hz, q: e.q || null, outW: e.outW || null,
+      y0: e.cy - (e.ay ?? e.hy), y1: e.cy + (e.ay ?? e.hy), body: null, lastO: 0, lastT: -1, releaseAt: 0, cant: e.cant != null, run: e.run, s0: e.s0, s1: e.s1,
     };
-    const b = new Body({ fixed: true, pos: [B.x + e.cx, e.cy, B.z + e.cz], group: GROUP.STATIC, fric: 0.65, rest: 0.05 });
+    const b = new Body({ fixed: true, pos: [B.x + e.cx, e.cy, B.z + e.cz], q: e.q ? e.q.slice() : [0, 0, 0, 1], group: GROUP.STATIC, fric: 0.65, rest: 0.05 });
+    if (B.indestr) { P.hp = P.maxHp = 1e15; }
     b.addBox([e.hx, e.hy, e.hz]);
     b.brk = P; b.panel = P;
     this.world.add(b);
@@ -97,7 +114,9 @@ export class Structures {
     for (let i = 0; i < P.length; i++) for (let j = 0; j < P.length; j++) {
       if (i === j) continue;
       const A = P[i], C = P[j];
-      if (Math.abs(A.y0 - C.y1) < 0.06 && Math.abs(A.cx - C.cx) < A.hx + C.hx - 0.02 && Math.abs(A.cz - C.cz) < A.hz + C.hz - 0.02) { A.below.push(C); C.above.push(A); }
+      if (A.q || C.q) {   // oriented panels: touching world boxes, A sits higher than C
+        if (A.cy > C.cy + 0.1 && Math.abs(A.cy - C.cy) < A.ay + C.ay + 0.1 && Math.abs(A.cx - C.cx) < A.ax + C.ax - 0.05 && Math.abs(A.cz - C.cz) < A.az + C.az - 0.05 && A.y0 < C.y1 + 0.12) { A.below.push(C); C.above.push(A); }
+      } else if (Math.abs(A.y0 - C.y1) < 0.06 && Math.abs(A.cx - C.cx) < A.hx + C.hx - 0.02 && Math.abs(A.cz - C.cz) < A.hz + C.hz - 0.02) { A.below.push(C); C.above.push(A); }
     }
     // lateral neighbours along a wall run (for lintels bridging openings)
     const byRun = new Map();
@@ -109,6 +128,7 @@ export class Structures {
       if (Math.abs(a.s1 - b.s0) < 0.06) { a.nR.push(b); b.nL.push(a); }
     }
     this.list.push(B);
+    validateBuilding(this, B);
     this.rebuild(B);
   }
 
@@ -119,7 +139,7 @@ export class Structures {
     const pl = cracked ? T.crack : T.plaster;
     const pOut = B.paintOut, pIn = B.paintIn;
     if (P.kind === 'wall' || P.kind === 'lintel') {
-      const nAxisX = P.hx < P.hz; // wall normal along x -> faces 0,1
+      const nAxisX = !P.q && P.hx < P.hz; // wall normal along x -> faces 0,1
       const fo = nAxisX ? (P.out && P.out[0] > 0 ? 0 : 1) : (P.out && P.out[1] > 0 ? 4 : 5);
       const fa = nAxisX ? [0, 1] : [4, 5];
       const isCore = P.e.core;
@@ -145,7 +165,11 @@ export class Structures {
   rebuild(B) {
     const g = new GeoBuf();
     const off = [B.x, 0, B.z];
-    for (const P of B.panels) if (P.state === 'fixed') g.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, this.faceCfg(P), off, 0.96 + 0.04 * ((P.e.id * 0.618) % 1), true);
+    for (const P of B.panels) if (P.state === 'fixed') {
+      const sh = 0.96 + 0.04 * ((P.e.id * 0.618) % 1);
+      if (P.q) g.boxQ(P.q, [P.cx, P.cy, P.cz], P.hx, P.hy, P.hz, this.faceCfg(P), off, (P.s0 + P.s1) / 2, sh);
+      else g.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, this.faceCfg(P), off, sh, true);
+    }
     const old = B.mesh;
     B.mesh = g.n ? this.r.createMesh(g.finish(), { mat: this.material(), radius: B.radius }) : null;
     if (old) this.r.deleteMesh(old);
@@ -291,6 +315,16 @@ export class Structures {
     if (P.f === 0) this.hazardCheck(P.B, P, why === 'hit' ? 1 : 0.4);
   }
 
+  // take a building out of the world completely (used by the Design Lab when a design is rebuilt or deleted)
+  removeBuilding(B) {
+    for (const P of B.panels) { if (P.body) this.world.remove(P.body); P.state = 'gone'; }
+    B.free.clear();
+    if (B.mesh) this.r.deleteMesh(B.mesh);
+    if (B.intMesh) this.r.deleteMesh(B.intMesh);
+    B.mesh = B.intMesh = null; B.removed = true;
+    const i = this.list.indexOf(B); if (i >= 0) this.list.splice(i, 1);
+  }
+
   // a person standing at a closed door can open it (the door leaf is taken out of the wall; no damage, no rubble)
   openDoorNear(p, R) {
     for (const B of this.list) {
@@ -399,10 +433,10 @@ export class Structures {
   }
 
   // load path: columns / bearing walls carry slabs, slabs carry what stands on them, lintels need both piers
-  checkStability(B) {
+  computeStable(B) {
     const stable = new Set();
-    for (const P of B.panels) if (P.state === 'fixed' && P.y0 < 0.05) stable.add(P);
-    const fixed = B.panels.filter((P) => P.state === 'fixed' && P.y0 >= 0.05);
+    for (const P of B.panels) if (P.state === 'fixed' && (P.y0 < 0.05 || B.indestr || P.anchored)) stable.add(P);
+    const fixed = B.panels.filter((P) => P.state === 'fixed' && P.y0 >= 0.05 && !B.indestr && !P.anchored);
     let changed = true, guard = 0;
     while (changed && guard++ < 50) {
       changed = false;
@@ -421,7 +455,9 @@ export class Structures {
             ok = nS > 0 && live.length >= need && (spread || nS <= 2);
           }
         } else if (P.kind === 'lintel') {
-          ok = P.nL.some((q) => stable.has(q)) && P.nR.some((q) => stable.has(q));
+          // a lintel (or a run of arch-ring strips) is held when the chain of lintels reaches a standing pier on BOTH sides
+          const reach = (dir) => { const seen = new Set([P]), st = [P]; while (st.length) { const q = st.pop(); for (const w of dir < 0 ? q.nL : q.nR) { if (seen.has(w)) continue; seen.add(w); if (w.kind === 'lintel') st.push(w); else if (stable.has(w)) return true; } } return false; };
+          ok = reach(-1) && reach(1);
         } else if (P.str) {
           ok = P.below.some((q) => stable.has(q));
         } else {
@@ -430,6 +466,11 @@ export class Structures {
         if (ok) { stable.add(P); changed = true; }
       }
     }
+    return { stable, fixed };
+  }
+
+  checkStability(B) {
+    const { stable, fixed } = this.computeStable(B);
     let lost = 0;
     const t = this.ctx.time;
     for (const P of fixed) if (!stable.has(P) && !P.releaseAt) { P.releaseAt = t + 0.1 + Math.random() * 0.4 + P.f * 0.05; lost++; }
@@ -496,7 +537,7 @@ export class Structures {
       for (const P of B.panels) {
         if (P.state === 'fixed' && P.releaseAt && t >= P.releaseAt) {
           P.releaseAt = 0;
-          const o = P.out || [0, 0];
+          const o = P.outW || P.out || [0, 0];
           this.releasePanel(P, [o[0] * 0.8 + (Math.random() - 0.5) * 0.6, -0.5, o[1] * 0.8 + (Math.random() - 0.5) * 0.6], 'collapse');
           P.body.w = [(Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 1.2];
           if (fx && B.collapseDust < 6) {

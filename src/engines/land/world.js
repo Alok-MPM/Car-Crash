@@ -178,6 +178,8 @@ export class Scene {
     S.addBuilding({ recipe: 'house', x: -48, z: -70 });
     S.addBuilding({ recipe: 'houseSmall', x: 50, z: -90 });
     S.addBuilding({ recipe: 'shop', x: -52, z: -112 });
+  S.addBuilding({ recipe: 'mandir', x: 95, z: -150 });          // indestructible temple (free-form shape engine)
+  S.addBuilding({ recipe: 'roundTower', x: -105, z: -60 });
     // end wall of the runway (stacked concrete blocks)
     S.addBarrier({ x: 0, z: -6100, len: 60, th: 3, h: 6, rows: 2, seg: 3 });
     // ramps (fixed, raycastable)

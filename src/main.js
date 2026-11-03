@@ -4,6 +4,7 @@ import { World, GROUP } from './core/physics.js';
 import { CARS, getCar } from './engines/cars/cars.js';
 import { Car, drawDebris } from './engines/cars/car.js';
 import { Person } from './engines/people/person.js';
+import { initLab } from './ui/lab.js';
 import { Scene } from './engines/land/world.js';
 import { FX } from './core/fx.js';
 import { Sfx } from './core/audio.js';
@@ -306,7 +307,9 @@ addEventListener('pointermove', (e) => {
 addEventListener('wheel', (e) => { orbitDist = clamp(orbitDist * (1 + Math.sign(e.deltaY) * 0.08), 3.5, 30); }, { passive: true });
 const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
 
+let lab = null;
 function updateCamera(dt) {
+  if (lab && lab.active) { const c = lab.cam(); camPos = c.eye; camLook = c.look; camFov = c.fov; return; }
   if (person.active && person.body) {
     const pp = person.body.pos;
     camYaw += angDiff(person.yaw, camYaw) * (1 - Math.exp(-dt * 4));
@@ -338,11 +341,14 @@ function updateCamera(dt) {
   const cp = [b.pos[0], b.pos[1], b.pos[2]];
   let eye, look;
   if (menuOpen) {
-    orbitYaw += dt * (dragging ? 0 : 0.35);
-    const d = Math.max(orbitDist, g.L * 1.5);
-    eye = [cp[0] + Math.sin(orbitYaw) * Math.cos(orbitPitch) * d, cp[1] + 0.3 + Math.sin(orbitPitch) * d, cp[2] + Math.cos(orbitYaw) * Math.cos(orbitPitch) * d];
-    look = [cp[0], cp[1] + 0.2, cp[2]];
-    camFov = 40;
+    orbitYaw += dt * (dragging ? 0 : 0.22);
+    const d = g.L * 1.95 + 1.4;
+    const pitch = 0.2;
+    eye = [cp[0] + Math.sin(orbitYaw) * Math.cos(pitch) * d, cp[1] + 0.45 + Math.sin(pitch) * d, cp[2] + Math.cos(orbitYaw) * Math.cos(pitch) * d];
+    // look slightly above the car so it sits in the lower-middle of the screen with room for the name above the nav bar
+    const rx = Math.cos(orbitYaw), rz = -Math.sin(orbitYaw), sh = d * 0.13;
+    look = [cp[0] - rx * sh, cp[1] + 0.45, cp[2] - rz * sh];
+    camFov = 34;
   } else if (camMode === 0 || camMode === 1) {
     const far = camMode === 1 ? 1.9 : 1;
     const dist = (g.L * 0.95 + 2.6 + clamp(sp / 80, 0, 1) * 1.6) * far;
@@ -495,9 +501,9 @@ function drawGauge() {
     const on = t <= f, red = t >= rl * 0.93;
     const major = i % 6 === 0;
     const r1 = R * 0.9, r2 = R * (major ? 0.74 : 0.8);
-    g.strokeStyle = on ? (red ? '#ff3b30' : t > rl * 0.75 ? '#ffb02e' : '#ff7a1a') : red ? 'rgba(255,59,48,.28)' : 'rgba(255,255,255,.18)';
+    g.strokeStyle = on ? (red ? '#ff3b30' : t > rl * 0.75 ? '#ffb02e' : '#f5c400') : red ? 'rgba(255,59,48,.28)' : 'rgba(255,255,255,.18)';
     g.lineWidth = major ? 6 : 4;
-    if (on) { g.shadowColor = red ? '#ff3b30' : '#ff7a1a'; g.shadowBlur = 8; }
+    if (on) { g.shadowColor = red ? '#ff3b30' : '#f5c400'; g.shadowBlur = 8; }
     g.beginPath(); g.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); g.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2); g.stroke(); g.shadowBlur = 0;
   }
   g.fillStyle = 'rgba(255,255,255,.75)'; g.font = `700 ${R * 0.12}px system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -506,8 +512,8 @@ function drawGauge() {
   // needle (glowing digital blade)
   const na = a0 + span * f;
   g.save(); g.translate(cx, cy); g.rotate(na);
-  const ng = g.createLinearGradient(R * 0.2, 0, R * 0.92, 0); ng.addColorStop(0, 'rgba(255,106,26,0)'); ng.addColorStop(1, '#ff6a1a');
-  g.shadowColor = '#ff6a1a'; g.shadowBlur = 16; g.fillStyle = ng;
+  const ng = g.createLinearGradient(R * 0.2, 0, R * 0.92, 0); ng.addColorStop(0, 'rgba(245,196,0,0)'); ng.addColorStop(1, '#f5c400');
+  g.shadowColor = '#f5c400'; g.shadowBlur = 16; g.fillStyle = ng;
   g.beginPath(); g.moveTo(R * 0.2, -2); g.lineTo(R * 0.93, -3.5); g.lineTo(R * 0.97, 0); g.lineTo(R * 0.93, 3.5); g.lineTo(R * 0.2, 2); g.closePath(); g.fill();
   g.restore(); g.shadowBlur = 0;
   // speed
@@ -528,7 +534,7 @@ function drawGauge() {
   };
   const bt = Math.max(...v.wheels.map((q) => q.bTemp || 25));
   bar(24, h - 34, 170, inp.brake, '#ff3b30', 'BRAKE ' + Math.round(inp.brake * 100) + '%  ·  disc ' + Math.round(bt) + '°C');
-  bar(w - 194, h - 34, 170, inp.throttle, '#ff7a1a', 'THROTTLE ' + Math.round(inp.throttle * 100) + '%');
+  bar(w - 194, h - 34, 170, inp.throttle, '#f5c400', 'THROTTLE ' + Math.round(inp.throttle * 100) + '%');
   if (spec.turbo) bar(24, h - 84, 170, clamp(v.boost, 0, 1), '#4aa8ff', 'BOOST');
   g.textAlign = 'center'; g.font = `800 ${R * 0.11}px system-ui`;
   if (v.tcAct > 0.3) { g.fillStyle = '#ffb02e'; g.fillText('TC', cx - R * 0.55, cy + R * 0.7); }
@@ -542,7 +548,7 @@ function updateHud(dt) {
   const hp = player.health;
   fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS';
   $('hpfill').style.width = (hp * 100).toFixed(0) + '%';
-  $('hpfill').style.background = hp > 0.6 ? 'linear-gradient(90deg,#37d67a,#c8e84a)' : hp > 0.3 ? 'linear-gradient(90deg,#ffb02e,#ffd24a)' : 'linear-gradient(90deg,#ff3b30,#ff7a30)';
+  $('hpfill').style.background = hp > 0.6 ? '#dfe3e8' : hp > 0.3 ? '#f5c400' : '#e5484d';
   $('cost').innerHTML = '$' + Math.round(player.cost).toLocaleString() + (propDmg > 500 ? '<small style="display:block;font-size:12px;font-weight:600;color:var(--muted)">property $' + Math.round(propDmg).toLocaleString() + '</small>' : '');
   const lost = [];
   const names = ['', 'Hood', 'Trunk', 'Front bumper', 'Rear bumper', 'Left door', 'Right door', 'L mirror', 'R mirror', 'Wing'];
@@ -564,28 +570,34 @@ function updateHud(dt) {
 
 // ---------- menu ----------
 let menuOpen = true;
-function specBars(spec) {
-  const mx = { hp: 1500, nm: 1700, kg: 2400, vmax: 430, z: 4 };
-  const bar = (label, val, frac, unit) => `<div class="row"><span>${label}</span><b>${val}${unit || ''}</b></div><div class="bar"><i style="width:${clamp(frac, 0.04, 1) * 100}%"></i></div>`;
-  return `<div style="font-weight:800;font-size:16px">${spec.name}</div><div class="row" style="margin-bottom:6px"><span>${spec.tag} · ${spec.maker}</span><b>$${spec.price.toLocaleString()}</b></div>
-  <div class="row" style="margin-bottom:6px"><span>${spec.engine}</span><b>${spec.drive}</b></div>` +
-    bar('Power', Math.round(spec.hp) + ' hp / ' + Math.round(spec.hp * 0.7457) + ' kW', spec.hp / mx.hp, '') +
-    bar('Torque', spec.nm, spec.nm / mx.nm, ' Nm') + bar('Weight', spec.kg, 1 - (spec.kg - 1400) / 1200, ' kg') +
-    bar('Top speed', spec.vmax, spec.vmax / mx.vmax, ' km/h') + bar('0–100 km/h', spec.zero100.toFixed(1), 1 - (spec.zero100 - 2) / 2.2, ' s');
+function carInfoHTML(spec) {
+  const mx = { hp: 1500, nm: 1700, vmax: 430 };
+  const st = (label, val, unit, frac) => `<div class="stat"><small>${label}</small><b>${val}<em>${unit}</em></b><div class="bar"><i style="width:${clamp(frac, 0.05, 1) * 100}%"></i></div></div>`;
+  return `<div class="maker">${spec.maker} &nbsp;·&nbsp; ${spec.drive}</div><div class="carName">${spec.name}</div><div class="tagline">${spec.tag} &nbsp;·&nbsp; ${spec.engine}</div>` +
+    `<div class="statRow">${st('Power', Math.round(spec.hp), 'hp', spec.hp / mx.hp)}${st('Torque', spec.nm, 'Nm', spec.nm / mx.nm)}${st('0-100', spec.zero100.toFixed(1), 's', 1 - (spec.zero100 - 2) / 2.2)}${st('Top', spec.vmax, 'km/h', spec.vmax / mx.vmax)}${st('Weight', spec.kg, 'kg', 1 - (spec.kg - 1400) / 1200)}</div>`;
 }
+function pickCar(id, dir) {
+  if (S.car === id) return;
+  S.car = id; S.color = 0; save(); makePlayer(false); syncMenu();
+  const ci = $('carInfo'); ci.classList.remove('swap'); void ci.offsetWidth; ci.classList.add('swap');
+  orbitYaw = camYaw + Math.PI + 0.55;
+}
+function stepCar(d) { const i = CARS.findIndex((c) => c.id === S.car); pickCar(CARS[(i + d + CARS.length) % CARS.length].id); }
 function syncMenu() {
   const list = $('carList');
   if (!list.children.length) {
     for (const c of CARS) {
       const b = document.createElement('button'); b.className = 'carBtn'; b.dataset.id = c.id;
-      b.innerHTML = `${c.name}<small>${c.tag}</small>`;
-      b.onclick = () => { S.car = c.id; S.color = 0; save(); makePlayer(false); syncMenu(); };
+      b.innerHTML = `<b>${c.name}</b><small>${c.tag}</small><div class="nums"><span>${Math.round(c.hp)}<em>HP</em></span><span>${c.zero100.toFixed(1)}<em>S</em></span><span>${c.vmax}<em>KM/H</em></span></div><div class="pr">$${c.price.toLocaleString()}</div>`;
+      b.onclick = () => { pickCar(c.id); openSheet(null); };
       list.appendChild(b);
     }
+    $('dots').innerHTML = CARS.map(() => '<i></i>').join('');
   }
   [...list.children].forEach((b) => b.classList.toggle('sel', b.dataset.id === S.car));
+  [...$('dots').children].forEach((d, i) => d.classList.toggle('on', CARS[i].id === S.car));
   const spec = getCar(S.car);
-  $('specs').innerHTML = specBars(spec);
+  $('carInfo').innerHTML = carInfoHTML(spec);
   const sw = $('swatches'); sw.innerHTML = '';
   spec.colors.forEach((hex, i) => {
     const b = document.createElement('button'); b.className = 'sw' + (i === S.color % spec.colors.length ? ' sel' : ''); b.style.background = hex; b.setAttribute('aria-label', 'paint ' + (i + 1));
@@ -600,7 +612,23 @@ function syncMenu() {
   seg('segU', 'units');
   seg('segTilt', 'tilt', () => { if (S.tilt && window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); });
 }
-function toggleMenu() { menuOpen = !menuOpen; $('menu').classList.toggle('hidden', !menuOpen); if (menuOpen) { orbitYaw = camYaw + Math.PI + 0.5; } }
+let sheetOpen = null;
+function openSheet(name) {
+  sheetOpen = sheetOpen === name ? null : name;
+  $('invSheet').classList.toggle('hidden', sheetOpen !== 'inv');
+  $('setSheet').classList.toggle('hidden', sheetOpen !== 'set');
+  $('nInv').classList.toggle('on', sheetOpen === 'inv');
+  $('nSet').classList.toggle('on', sheetOpen === 'set');
+  const hideInfo = sheetOpen === 'inv';
+  $('carInfo').style.visibility = hideInfo ? 'hidden' : 'visible';
+}
+$('arL').onclick = () => stepCar(-1); $('arR').onclick = () => stepCar(1);
+$('nInv').onclick = () => openSheet('inv'); $('nSet').onclick = () => openSheet('set'); $('bSet').onclick = () => openSheet('set');
+$('invX').onclick = () => openSheet(null); $('setX').onclick = () => openSheet(null);
+$('nPaint').onclick = () => { const sw = $('swatches'); sw.style.outline = '2px solid var(--accent)'; setTimeout(() => (sw.style.outline = ''), 700); S.color = (S.color + 1) % getCar(S.car).colors.length; save(); makePlayer(false); syncMenu(); };
+$('nLab').onclick = () => { if (window.openLab) window.openLab(); };
+addEventListener('keydown', (e) => { if (!menuOpen) return; if (e.code === 'ArrowLeft') stepCar(-1); else if (e.code === 'ArrowRight') stepCar(1); else if (e.code === 'Enter') $('go').click(); });
+function toggleMenu() { menuOpen = !menuOpen; $('menu').classList.toggle('hidden', !menuOpen); if (menuOpen) { orbitYaw = camYaw + Math.PI + 0.5; openSheet(null); } }
 $('go').onclick = () => { sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
 $('bWalk').onclick = toggleWalk; $('bMenu').onclick = toggleMenu; $('bCam').onclick = cycleCam; $('bRep').onclick = repair; $('bSpawn').onclick = spawnAhead; $('bTod').onclick = nextTod; $('bSlow').onclick = toggleSlow; $('bSnd').onclick = toggleSound;
 
@@ -732,12 +760,13 @@ async function boot() {
   ctx.onProp = (v) => { propDmg += v; };
   scene = new Scene(ctx, { density: S.quality === 0 ? 0.6 : 1 });
   ctx.scene = scene;
+  lab = initLab({ scene: () => scene, player: () => player });
   world.preHit = (a, b, c) => scene.structures.preHit(a, b, c);
   makePlayer(false);
   populateNPCs();
   syncMenu();
   $('loading').style.display = 'none';
   requestAnimationFrame((t) => { last = t / 1000; frame(t); });
-  window.__game = { person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
+  window.__game = { get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
 }
 setTimeout(() => { boot().catch((e) => { console.error(e); $('loading').innerHTML = '<div style="padding:24px;text-align:center">Failed to start: ' + String(e.message || e).slice(0, 300) + '</div>'; }); }, 30);

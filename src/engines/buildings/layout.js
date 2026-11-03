@@ -96,7 +96,8 @@ export function layout(plan, o = {}) {
     const front = f; // for readability
     if (!loadbearing) {
       // RCC columns on every grid point (core area skipped in tall frames)
-      const core = plan.core ? { ax: Math.min(3, w * 0.2), az: Math.min(3, d * 0.2) } : null;
+      const bay = sx % 2 === 1 && sz % 2 === 1;   // odd bay count: the core is exactly the centre bay, so its walls carry the centre slab
+      const core = plan.core ? (bay ? { ax: spx / 2, az: spz / 2 } : { ax: Math.min(3, w * 0.2), az: Math.min(3, d * 0.2) }) : null;
       for (let a = 0; a <= sx; a++) for (let c = 0; c <= sz; c++) {
         const cxx = a === 0 ? -w / 2 + col / 2 : a === sx ? w / 2 - col / 2 : gx[a];
         const czz = c === 0 ? -d / 2 + col / 2 : c === sz ? d / 2 - col / 2 : gz[c];
@@ -106,8 +107,9 @@ export function layout(plan, o = {}) {
       if (core) {
         const { ax, az } = core, t = 0.175;
         for (const sg of [-1, 1]) {
-          add({ kind: 'wall', mat: 'rcc', str: true, f, cx: 0, cy: f * H + wallH / 2, cz: sg * (az - t), hx: ax, hy: wallH / 2, hz: t, out: null, interior: true, core: true });
-          add({ kind: 'wall', mat: 'rcc', str: true, f, cx: sg * (ax - t), cy: f * H + wallH / 2, cz: 0, hx: t, hy: wallH / 2, hz: az - 2 * t, out: null, interior: true, core: true });
+          const o = bay ? 0 : t;   // centre-bay core: walls sit ON the slab edge so the slab rests on them
+          add({ kind: 'wall', mat: 'rcc', str: true, f, cx: 0, cy: f * H + wallH / 2, cz: sg * (az - o), hx: ax + (bay ? t : 0), hy: wallH / 2, hz: t, out: null, interior: true, core: true });
+          add({ kind: 'wall', mat: 'rcc', str: true, f, cx: sg * (ax - o), cy: f * H + wallH / 2, cz: 0, hx: t, hy: wallH / 2, hz: az - (bay ? 0 : 2 * t), out: null, interior: true, core: true });
         }
       }
     }
