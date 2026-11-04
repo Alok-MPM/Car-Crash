@@ -1,7 +1,9 @@
 // Runtime for engineered buildings: turns Building Engineer output into physics panels, one merged mesh per building,
 // layered fracture (paint -> plaster -> brick / concrete -> rebar), load-path collapse, gas-only fires and LOD'd interiors.
+import { compileDesign, STYLES } from './compile.js';
+import { generate } from './architect.js';
 import { Body, GROUP } from '../../core/physics.js';
-import { m4, clamp } from '../../core/math.js';
+import { m4, clamp, qRot, qMul } from '../../core/math.js';
 import { MATERIALS, UNITS } from '../../data/materials.js';
 import { design, capacity } from './engineer.js';
 import { layout, mulberry } from './layout.js';
@@ -39,18 +41,33 @@ export class Structures {
   // ---------- construction ----------
   addBuilding(o) {
     const spec = { ...(RECIPES[o.recipe] || {}), ...o };
+    let C = null;
+    if (spec.brief && !spec.design) spec.design = generate(spec.brief);
+    if (spec.design) {
+      C = compileDesign(spec.design);
+      spec.shapes = C.shapes; spec.w = C.bounds.x1 - C.bounds.x0; spec.d = C.bounds.z1 - C.bounds.z0; spec.floors = spec.design.floors.length;
+      spec.system = (spec.design.mat || (C.style && C.style.mat)) === 'clay' && spec.floors <= 4 ? 'loadbearing' : 'frame';
+      if (!spec.paint) spec.paint = (C.style && C.style.out) || undefined;
+    }
     const plan = design(spec);
     const seed = o.seed ?? (((o.x * 73856093) ^ (o.z * 19349663)) >>> 0);
     let lay;
+    const decos = [];
     if (spec.shapes) {
       // free-form building: elements come from the shape engine (curved walls, domes, spires...), no storey layout
       const rng = mulberry(seed), el = [];
-      shapeElements(spec.shapes, (e) => { e.id = el.length; el.push(e); return e; });
+      const tagId = new Map();
+      shapeElements(spec.shapes, (e) => { if (e.deco) { decos.push(e); return e; } e.id = el.length; el.push(e); if (e.tag) tagId.set(e.tag, e.id); return e; });
       const pk = (a) => a[(rng() * a.length) | 0];
       let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, y1 = 0;
       for (const e of el) { const ax = e.ax ?? e.hx, az = e.az ?? e.hz, ay = e.ay ?? e.hy; x0 = Math.min(x0, e.cx - ax); x1 = Math.max(x1, e.cx + ax); z0 = Math.min(z0, e.cz - az); z1 = Math.max(z1, e.cz + az); y1 = Math.max(y1, e.cy + ay); }
       plan.w = x1 - x0; plan.d = z1 - z0; plan.height = y1; plan.note = 'free-form shapes (' + spec.shapes.length + ' primitives)';
       lay = { el, rooms: [], furn: [], hazards: [], paint: { out: spec.paint || pk(PAINTS.outer), in: pk(PAINTS.inner), trim: pk(PAINTS.trim) }, gx: [], gz: [], wallH: y1 };
+      if (C) {
+        lay.rooms = C.rooms; lay.hazards = C.hazards; lay.stairs = C.stairs; lay.base = C.base;
+        lay.furn = C.furn.map((f) => ({ ...f, slab: f.slab == null || f.slab === -1 ? -1 : (tagId.get(f.slab) ?? -1) }));
+        if (C.style) { lay.paint.trim = C.style.trim; lay.paint.in = spec.design.inner || C.style.inner || lay.paint.in; }
+      }
     } else lay = layout(plan, { seed });
     const B = {
       x: o.x, z: o.z, w: plan.w, d: plan.d, floors: plan.floors, plan, lay, sys: plan.system, panels: [], free: new Set(), dirty: true, mesh: null, intMesh: null, intDirty: true,
@@ -58,7 +75,7 @@ export class Structures {
       model: m4.fromTRS(new Float32Array(16), [o.x, 0, o.z], [0, 0, 0, 1], 1),
       paintOut: hexRGB(lay.paint.out), paintIn: hexRGB(lay.paint.in), trim: hexRGB(lay.paint.trim),
     };
-    B.spec = o; B.recipe = o.recipe || 'custom';
+    B.spec = o; B.recipe = o.recipe || 'custom'; B.stairs = lay.stairs || []; B.design = spec.design || null; B.compiled = C; B.compileIssues = C ? C.issues : [];
     B.radius = Math.hypot(plan.w, plan.d, plan.height || plan.floors * plan.storeyH) / 2 + 3;
     B.cy = (plan.height || plan.floors * plan.storeyH) / 2;
     B.indestr = !!spec.indestructible;
@@ -69,6 +86,7 @@ export class Structures {
       const P = byId.get(e.id);
       if (e.lat) P.lat = e.lat.map((i) => byId.get(i));
     }
+    B.decos = decos.map((e) => ({ e, host: e.host != null ? byId.get(e.host) : null }));
     this.finishBuilding(B);
     return B;
   }
@@ -96,11 +114,12 @@ export class Structures {
     const P = {
       B, e, kind: e.kind, mat: e.mat, f: e.f, cx: e.cx, cy: e.cy, cz: e.cz, hx: e.hx, hy: e.hy, hz: e.hz, str: !!e.str, out: e.out, interior: !!e.interior,
       hp: info.cap, maxHp: info.cap, mass: info.mass, plasterMass: info.plasterMass, state: 'fixed', below: [], above: [], lat: [], nL: [], nR: [],
-      ax: e.ax ?? e.hx, ay: e.ay ?? e.hy, az: e.az ?? e.hz, q: e.q || null, outW: e.outW || null,
+      ax: e.ax ?? e.hx, ay: e.ay ?? e.hy, az: e.az ?? e.hz, q: e.q || null, outW: e.outW || null, anchored: !!e.anchored,
       y0: e.cy - (e.ay ?? e.hy), y1: e.cy + (e.ay ?? e.hy), body: null, lastO: 0, lastT: -1, releaseAt: 0, cant: e.cant != null, run: e.run, s0: e.s0, s1: e.s1,
     };
-    const b = new Body({ fixed: true, pos: [B.x + e.cx, e.cy, B.z + e.cz], q: e.q ? e.q.slice() : [0, 0, 0, 1], group: GROUP.STATIC, fric: 0.65, rest: 0.05 });
-    if (B.indestr) { P.hp = P.maxHp = 1e15; }
+    const b = new Body({ fixed: true, pos: [B.x + e.cx, e.cy, B.z + e.cz], q: e.q ? e.q.slice() : [0, 0, 0, 1], group: e.stair ? GROUP.STAIR : GROUP.STATIC, fric: 0.65, rest: 0.05 });
+    if (B.indestr || e.ghost) { P.hp = P.maxHp = 1e15; }
+    if (e.ghost) P.anchored = true;
     b.addBox([e.hx, e.hy, e.hz]);
     b.brk = P; b.panel = P;
     this.world.add(b);
@@ -127,6 +146,8 @@ export class Structures {
       if (ov < 0.05) continue;
       if (Math.abs(a.s1 - b.s0) < 0.06) { a.nR.push(b); b.nL.push(a); }
     }
+    for (const it of B.lay.furn) if (it.solid) { const b = new Body({ fixed: true, pos: [B.x + it.x, it.y, B.z + it.z], q: [0, 0, 0, 1], group: GROUP.STATIC, fric: 0.5, rest: 0.05 }); b.addBox([it.hx, it.hy, it.hz]); this.world.add(b); it.body = b; }
+    this.setupDoors(B);
     this.list.push(B);
     validateBuilding(this, B);
     this.rebuild(B);
@@ -137,7 +158,9 @@ export class Structures {
     const B = P.B, cracked = P.hp < P.maxHp * 0.55;
     const core = TILE_OF[P.mat] ?? T.rcc;
     const pl = cracked ? T.crack : T.plaster;
-    const pOut = B.paintOut, pIn = B.paintIn;
+    const pOut = P.e.tint ? hexRGB(P.e.tint) : B.paintOut, pIn = B.paintIn;
+    if (P.e.slabLook) { const roofL = P.e.roof; return (fi) => (fi === 2 ? (roofL ? [T.roof, 1, 1, 1] : [T.floor, pOut[0] * 0.6 + 0.4, pOut[1] * 0.6 + 0.4, pOut[2] * 0.6 + 0.4]) : fi === 3 ? [pl, pIn[0], pIn[1], pIn[2]] : [pl, pOut[0], pOut[1], pOut[2]]); }
+    if (P.e.stair) { const w = pOut; return (fi) => [fi === 2 ? T.wood : T.rcc, w[0], w[1], w[2]]; }
     if (P.kind === 'wall' || P.kind === 'lintel') {
       const nAxisX = !P.q && P.hx < P.hz; // wall normal along x -> faces 0,1
       const fo = nAxisX ? (P.out && P.out[0] > 0 ? 0 : 1) : (P.out && P.out[1] > 0 ? 4 : 5);
@@ -157,7 +180,7 @@ export class Structures {
       return (fi) => (fi === 2 ? (roof ? [T.roof, 1, 1, 1] : [T.floor, 1, 1, 1]) : fi === 3 ? [pl, pIn[0], pIn[1], pIn[2]] : [T.rcc, 1, 1, 1]);
     }
     if (P.kind === 'pane') { const fa = P.hx < P.hz ? [0, 1] : [4, 5]; return (fi) => (fa.includes(fi) ? [T.glass, 1, 1, 1] : [T.metal, 0.3, 0.3, 0.33]); }
-    if (P.kind === 'door') return (fi) => [T.wood, B.trim[0] * 2.2 + 0.25, B.trim[1] * 2.2 + 0.2, B.trim[2] * 2.2 + 0.15];
+    if (P.kind === 'door') { const dc = P.e.doorTint ? hexRGB(P.e.doorTint).map((v) => Math.min(1, v * 1.5)) : [B.trim[0] * 2.2 + 0.25, B.trim[1] * 2.2 + 0.2, B.trim[2] * 2.2 + 0.15]; return (fi) => [T.wood, dc[0], dc[1], dc[2]]; }
     return () => [T.rcc, 1, 1, 1];
   }
 
@@ -165,10 +188,16 @@ export class Structures {
   rebuild(B) {
     const g = new GeoBuf();
     const off = [B.x, 0, B.z];
-    for (const P of B.panels) if (P.state === 'fixed') {
+    for (const P of B.panels) if (P.state === 'fixed' && !P.e.ghost && !P.dyn) {
       const sh = 0.96 + 0.04 * ((P.e.id * 0.618) % 1);
       if (P.q) g.boxQ(P.q, [P.cx, P.cy, P.cz], P.hx, P.hy, P.hz, this.faceCfg(P), off, (P.s0 + P.s1) / 2, sh);
       else g.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, this.faceCfg(P), off, sh, true);
+    }
+    const trimC = B.trim;
+    for (const D of B.decos || []) {
+      if (D.host && D.host.state !== 'fixed') continue;
+      const e = D.e, c = e.tint ? hexRGB(e.tint) : trimC;
+      g.boxQ(e.q, [e.cx, e.cy, e.cz], e.hx, e.hy, e.hz, () => [T.white, c[0], c[1], c[2]], off, 0, 1);
     }
     const old = B.mesh;
     B.mesh = g.n ? this.r.createMesh(g.finish(), { mat: this.material(), radius: B.radius }) : null;
@@ -180,12 +209,12 @@ export class Structures {
     const g = new GeoBuf();
     const off = [B.x, 0, B.z];
     const slabOK = new Map();
-    for (const P of B.panels) if (P.kind === 'slab') slabOK.set(P.e.id, P.state === 'fixed');
+    for (const P of B.panels) if (P.kind === 'slab' || P.e.slabLook) slabOK.set(P.e.id, P.state === 'fixed');
     for (const R of B.lay.rooms) {
       if (R.f === 0) g.box((R.x0 + R.x1) / 2, 0.015, (R.z0 + R.z1) / 2, (R.x1 - R.x0) / 2, 0.015, (R.z1 - R.z0) / 2, (fi) => (fi === 2 ? [T.floor, 1, 1, 1] : null), off, 1, false);
     }
     for (const it of B.lay.furn) {
-      if (it.slab >= 0 && !slabOK.get(it.slab)) continue;
+      if (it.slab >= 0 && !slabOK.get(it.slab)) { if (it.body) { this.world.remove(it.body); it.body = null; } continue; }
       const c = hexRGB(it.color);
       const tile = it.tile === 'wood' ? T.wood : it.tile === 'fabric' ? T.fabric : it.tile === 'metal' ? T.metal : T.white;
       g.box(it.x, it.y, it.z, it.hx, it.hy, it.hz, () => [tile, c[0], c[1], c[2]], off, 1, false);
@@ -198,7 +227,7 @@ export class Structures {
 
   freeMesh(P) {
     const cracked = P.hp < P.maxHp * 0.55;
-    const key = [P.B.lay.paint.out, P.kind, P.mat, P.hx.toFixed(2), P.hy.toFixed(2), P.hz.toFixed(2), P.out ? P.out.join('') : '', cracked, P.e.roof ? 1 : 0, P.e.parapet ? 1 : 0].join('|');
+    const key = [P.B.lay.paint.out, P.kind, P.mat, P.hx.toFixed(2), P.hy.toFixed(2), P.hz.toFixed(2), P.out ? P.out.join('') : '', cracked, P.e.roof ? 1 : 0, P.e.parapet ? 1 : 0, P.e.tint || ''].join('|');
     let m = this.freeMeshes.get(key);
     if (!m) {
       const g = new GeoBuf();
@@ -318,6 +347,7 @@ export class Structures {
   // take a building out of the world completely (used by the Design Lab when a design is rebuilt or deleted)
   removeBuilding(B) {
     for (const P of B.panels) { if (P.body) this.world.remove(P.body); P.state = 'gone'; }
+    for (const it of B.lay.furn) if (it.body) { this.world.remove(it.body); it.body = null; }
     B.free.clear();
     if (B.mesh) this.r.deleteMesh(B.mesh);
     if (B.intMesh) this.r.deleteMesh(B.intMesh);
@@ -325,21 +355,123 @@ export class Structures {
     const i = this.list.indexOf(B); if (i >= 0) this.list.splice(i, 1);
   }
 
-  // a person standing at a closed door can open it (the door leaf is taken out of the wall; no damage, no rubble)
-  openDoorNear(p, R) {
+  // surface height of a stair flight under world point (x,z) for a body whose feet are at y; null when not on stairs
+  stairHeight(x, z, y) {
+    let best = null;
     for (const B of this.list) {
-      if (Math.hypot(B.x - p[0], B.z - p[2]) > (B.radius || 30) + 4) continue;
-      for (const P of B.panels) {
-        if (P.kind !== 'door' || P.state !== 'fixed') continue;
-        if (Math.hypot(B.x + P.cx - p[0], B.z + P.cz - p[2]) > R) continue;
-        if (Math.abs((P.y0 + P.y1) / 2 - p[1]) > 2.2) continue;
-        this.world.remove(P.body);
-        P.state = 'open';
-        B.dirty = true;
-        return true;
+      if (!B.stairs || !B.stairs.length || Math.hypot(B.x - x, B.z - z) > (B.radius || 30)) continue;
+      const lx = x - B.x, lz = z - B.z;
+      for (const S of B.stairs) {
+        if (lx < S.x0 || lx > S.x1 || lz < S.z0 || lz > S.z1 + 0.4) continue;
+        const seam = S.seam ?? S.x0 + S.half + 0.06;
+        const into = S.z1 - lz;                       // distance back from the front edge of the well
+        let h;
+        if (lx < seam) {                              // flight A: climbs going back; each tread is a real step
+          if (into <= 0) h = S.base;
+          else if (into >= S.flight) h = S.base + S.Ht / 2;
+          else h = S.base + (Math.floor(into / S.tread) + 1) * S.rise;
+        } else {                                      // flight B: climbs coming forward
+          if (into <= 0) h = S.base + S.Ht;
+          else if (into >= S.flight) h = S.base + S.Ht / 2;
+          else h = S.base + S.Ht / 2 + (Math.min(S.n - 1, Math.floor((S.flight - into) / S.tread)) + 1) * S.rise;
+        }
+        const d = y - h;
+        if (d > -0.4 && d < 0.45 && (best === null || Math.abs(d) < Math.abs(y - best))) best = h;
       }
     }
-    return false;
+    return best;
+  }
+
+  // closest usable piece of furniture (stove, fridge, market counter ...) within R metres of a world point
+  interactNear(p, R) {
+    let best = null, bd = R;
+    for (const B of this.list) {
+      if (!B.lay.furn.length || Math.hypot(B.x - p[0], B.z - p[2]) > (B.radius || 30) + 4) continue;
+      for (const it of B.lay.furn) {
+        if (!it.act || (it.slab >= 0 && it.body === null && it.f > 0)) continue;
+        if (Math.abs(it.y - p[1] - 0.6) > 1.6) continue;
+        const d = Math.hypot(B.x + it.x - p[0], B.z + it.z - p[2]) - Math.max(it.hx, it.hz);
+        if (d < bd) { bd = d; best = { act: it.act, B, it }; }
+      }
+    }
+    return best;
+  }
+
+  // ---------- doors: hinged leaves that swing open and shut, roller shutters that roll up ----------
+  setupDoors(B) {
+    B.doors = [];
+    for (const P of B.panels) {
+      if (P.kind !== 'door' || !P.e.hinge) continue;
+      P.dyn = true;
+      const q = P.q || [0, 0, 0, 1];
+      const X = qRot(q, [1, 0, 0]);
+      const sgn = P.e.hinge === 'R' ? 1 : -1;
+      const H = [P.cx + X[0] * P.hx * sgn, P.cz + X[2] * P.hx * sgn];      // hinge post (building-local x, z)
+      const n = P.outW || [0, 1];
+      // swing towards the inside of the building, away from whoever opens it from the street
+      const dl = Math.hypot(P.cx - H[0], P.cz - H[1]) || 1, dx = (P.cx - H[0]) / dl, dz = (P.cz - H[1]) / dl;
+      const swing = (dz * -n[0] + -dx * -n[1]) > 0 ? 1 : -1;          // +90 deg about Y turns (dx,dz) into (dz,-dx); pick the side that points inside
+      B.doors.push({ P, H, q0: q.slice(), c0: [P.cx, P.cy, P.cz], open: 0, target: 0, roller: !!P.e.garage, swing, X, moving: false });
+    }
+  }
+
+  doorPose(D) {
+    const P = D.P;
+    if (D.roller) return { pos: [D.c0[0], D.c0[1] + D.open * (P.hy * 2 - 0.1), D.c0[2]], q: D.q0 };
+    const th = D.open * (Math.PI / 2) * D.swing;
+    const c = Math.cos(th), s = Math.sin(th);
+    const dx = D.c0[0] - D.H[0], dz = D.c0[2] - D.H[1];
+    const nx = D.H[0] + c * dx + s * dz, nz = D.H[1] - s * dx + c * dz;
+    const qy = [0, Math.sin(th / 2), 0, Math.cos(th / 2)];
+    return { pos: [nx, D.c0[1], nz], q: qMul(qy, D.q0) };
+  }
+
+  setDoorBody(B, D) {
+    const P = D.P, pose = this.doorPose(D);
+    if (P.body) this.world.remove(P.body);
+    P.body = null;
+    if (D.roller && D.open > 0.5) return;       // rolled up: nothing to collide with
+    const b = new Body({ fixed: true, pos: [B.x + pose.pos[0], pose.pos[1], B.z + pose.pos[2]], q: pose.q.slice(), group: GROUP.STATIC, fric: 0.5, rest: 0.05 });
+    b.addBox([P.hx, P.hy, P.hz]); b.brk = P; b.panel = P;
+    this.world.add(b); P.body = b; P.cx = pose.pos[0]; P.cz = pose.pos[2];
+  }
+
+  // F at a door: open it, or close it again. Returns 'opened' | 'closed' | 'blocked' | false
+  toggleDoorNear(p, R) {
+    let best = null, bd = R;
+    for (const B of this.list) {
+      if (!B.doors || !B.doors.length || Math.hypot(B.x - p[0], B.z - p[2]) > (B.radius || 30) + 4) continue;
+      for (const D of B.doors) {
+        const P = D.P; if (P.state !== 'fixed') continue;
+        const d = Math.hypot(B.x + D.c0[0] - p[0], B.z + D.c0[2] - p[2]) - P.hx * 0.6;
+        if (Math.abs((P.y0 + P.y1) / 2 - 0.0 - (p[1] + 1.0)) > 1.6) continue;
+        if (d < bd) { bd = d; best = { B, D }; }
+      }
+    }
+    if (!best) return false;
+    const { B, D } = best;
+    if (D.target === 1) {
+      // do not close it on somebody standing in the doorway
+      const dx = B.x + D.c0[0] - p[0], dz = B.z + D.c0[2] - p[2];
+      if (Math.hypot(dx, dz) < 0.55) return 'blocked';
+      D.target = 0; D.moving = true; if (D.P.body) { this.world.remove(D.P.body); D.P.body = null; }
+      return 'closed';
+    }
+    D.target = 1; D.moving = true; if (D.P.body) { this.world.remove(D.P.body); D.P.body = null; }
+    return 'opened';
+  }
+
+  updateDoors(dt) {
+    for (const B of this.list) {
+      if (!B.doors) continue;
+      for (const D of B.doors) {
+        if (!D.moving || D.P.state !== 'fixed') continue;
+        const sp = D.roller ? 0.5 : 1.8;
+        const dir = Math.sign(D.target - D.open);
+        D.open = Math.max(0, Math.min(1, D.open + dir * sp * dt));
+        if (Math.abs(D.open - D.target) < 1e-4) { D.open = D.target; D.moving = false; this.setDoorBody(B, D); }
+      }
+    }
   }
 
   breakCost(P) { return P.mat === 'glass' ? 400 : P.mat === 'wood' ? 300 : P.kind === 'slab' ? 2500 : P.mat === 'rcc' ? 1800 : 700; }
@@ -529,6 +661,7 @@ export class Structures {
   }
 
   update(dt) {
+    this.updateDoors(dt);
     if (this.shatterQ.length) this.processShatter();
     this.soundT -= dt;
     const t = this.ctx.time, fx = this.ctx.fx;
@@ -574,6 +707,13 @@ export class Structures {
         if (B.intMesh) r.add(B.intMesh, B.model, { cast: false });
       }
       if (d - B.radius > 260) continue;
+      if (B.doors) for (const D of B.doors) {
+        const P = D.P; if (P.state !== 'fixed') continue;
+        if (!P.dmesh) P.dmesh = this.freeMesh(P);
+        const pose = this.doorPose(D);
+        m4.fromTRS(P._m || (P._m = new Float32Array(16)), [B.x + pose.pos[0], pose.pos[1], B.z + pose.pos[2]], pose.q, 1);
+        r.add(P.dmesh, P._m, { cast: d - B.radius < 60 });
+      }
       for (const P of B.free) {
         const b = P.body;
         m4.fromTRS(P._m, b.pos, b.q, 1);

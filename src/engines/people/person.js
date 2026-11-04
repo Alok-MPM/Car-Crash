@@ -36,7 +36,7 @@ export class Person {
   }
   despawn() { if (this.body) { this.ctx.world.remove(this.body); this.body = null; } this.active = false; }
   get feet() { const p = this.body.pos; return [p[0], p[1] - HALF_H, p[2]]; }
-  get grounded() { const b = this.body; return b.gcT !== undefined && this.ctx.world.time - b.gcT < 0.12 || b.pos[1] - HALF_H < 0.06; }
+  get grounded() { const b = this.body; return (b.gcT !== undefined && this.ctx.world.time - b.gcT < 0.12) || b.pos[1] - HALF_H < 0.06 || (this.stairT !== undefined && this.ctx.world.time - this.stairT < 0.12); }
 
   // inp: {fwd -1..1, turn -1..1, run 0/1, jump bool}
   update(dt, inp) {
@@ -47,6 +47,12 @@ export class Person {
     const k = 1 - Math.exp(-dt * (this.grounded ? 12 : 2));
     b.v[0] += (tx - b.v[0]) * k; b.v[2] += (tz - b.v[2]) * k;
     if (inp.jump && this.grounded) b.v[1] = 4.2;
+    // stairs: treads do not collide with the body, the flight height is followed instead (up and down)
+    const st = this.ctx.scene.structures;
+    if (st.stairHeight) {
+      const h = st.stairHeight(b.pos[0], b.pos[2], b.pos[1] - HALF_H);
+      if (h !== null && b.v[1] < 2.5) { const ty = h + HALF_H + 0.04; b.pos[1] += (ty - b.pos[1]) * Math.min(1, dt * (ty > b.pos[1] ? 40 : 22)); b.v[1] = 0; this.stairT = this.ctx.world.time; }
+    }
     b.wake && b.wake();
     this.speed = Math.hypot(b.v[0], b.v[2]);
     this.walkT += dt * (this.speed * 1.9);

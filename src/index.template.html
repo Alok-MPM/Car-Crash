@@ -35,6 +35,8 @@ button:active{transform:scale(.97)}
 #topbtns button{padding:8px 11px;font-size:13px}
 #toast{left:50%;top:calc(18% + var(--sat));transform:translateX(-50%);text-align:center;font-size:clamp(18px,3.4vw,30px);font-weight:800;letter-spacing:.02em;text-shadow:0 2px 18px rgba(0,0,0,.7);opacity:0;transition:opacity .25s;white-space:nowrap}
 #toast.show{opacity:1}
+#bag{display:none;position:absolute;left:50%;bottom:calc(14px + var(--sab,0px));transform:translateX(-50%);padding:8px 14px;background:rgba(14,15,18,.82);border:1px solid rgba(255,255,255,.12);border-left:3px solid var(--accent);font-size:14px;font-weight:600;letter-spacing:.03em;white-space:nowrap}
+#bag b{color:var(--accent)}
 #toast small{display:block;font-size:.5em;font-weight:600;color:var(--accent2);letter-spacing:.14em;text-transform:uppercase}
 #hint{left:calc(12px + var(--sal));bottom:calc(10px + var(--sab));font-size:11px;color:var(--muted);line-height:1.6;max-width:300px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px}
 #hint kbd{background:rgba(255,255,255,.12);border-radius:4px;padding:0 5px;color:var(--text);font:inherit;font-size:10.5px}
@@ -168,8 +170,9 @@ body:has(#menu:not(.hidden)) #hud,body:has(#menu:not(.hidden)) #fps,body:has(#la
 .labTabs{display:flex;gap:0;margin-left:10px}
 .labTabs button{border-radius:0;font-family:var(--disp);font-weight:800;font-size:17px;letter-spacing:.14em;text-transform:uppercase;padding:8px 18px;background:rgba(14,15,18,.85)}
 .labTabs button.on{background:var(--accent);color:#14110a;border-color:var(--accent)}
-#labClose{margin-left:auto;font-family:var(--disp);font-weight:700;font-size:15px;letter-spacing:.1em;text-transform:uppercase}
-#labSide{position:absolute;left:calc(10px + var(--sal));top:calc(64px + var(--sat));bottom:calc(10px + var(--sab));width:min(400px,48vw);display:flex;flex-direction:column;background:rgba(10,11,13,.93);border:1px solid rgba(255,255,255,.1);border-left:3px solid var(--accent)}
+#labCopy{margin-left:auto;font-family:var(--disp);font-weight:700;font-size:15px;letter-spacing:.1em;text-transform:uppercase}
+#labClose{margin-left:8px;font-family:var(--disp);font-weight:700;font-size:15px;letter-spacing:.1em;text-transform:uppercase}
+#labSide{position:absolute;left:calc(10px + var(--sal));top:calc(64px + var(--sat));bottom:calc(10px + var(--sab));width:min(450px,50vw);display:flex;flex-direction:column;background:rgba(10,11,13,.93);border:1px solid rgba(255,255,255,.1);border-left:3px solid var(--accent)}
 #labSide .pane{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:12px 14px}
 #labSide .pane.hidden{display:none}
 #labSide h4{margin:12px 0 6px;font-family:var(--disp);font-weight:800;font-size:15px;letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
@@ -199,12 +202,22 @@ body:has(#menu:not(.hidden)) #hud,body:has(#menu:not(.hidden)) #fps,body:has(#la
 .note{font-size:13px;color:var(--muted);margin:6px 0}
 .paints{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}
 .paints .sw{width:32px;height:32px;font-weight:800;color:#222;background:#d9dce1}
+#labSide .toolbar button{padding:5px 9px;font-size:13px}
+#labSide .toolbar{gap:4px;margin-bottom:4px}
 #planCv{width:100%;height:auto;display:block;background:#0c0d10;border:1px solid rgba(255,255,255,.1);touch-action:none;margin-top:8px}
 .toolbar{display:flex;flex-wrap:wrap;gap:5px}
 .hint2{font-size:12.5px;color:var(--muted);margin:6px 0}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
 .report{padding:8px 14px;font-size:13px;color:#cdd1d7;border-top:1px solid rgba(255,255,255,.08);min-height:44px}
 .report .ok{color:var(--ok)}.report .warn{color:var(--accent)}.report .fx,.report .op{font-size:12px;color:var(--muted);margin-top:2px}
+#planCv{width:100%;height:auto;display:block;background:#0c0d10;border:1px solid rgba(255,255,255,.1);margin:8px 0 4px;touch-action:none}
+#labPick{position:absolute;right:calc(14px + var(--sar));top:calc(70px + var(--sat));width:min(330px,42vw);background:rgba(10,11,13,.93);border:1px solid rgba(255,255,255,.12);border-left:3px solid var(--accent);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+#labPick.hidden{display:none}
+#labPick b{font-family:var(--disp);font-weight:800;font-size:20px;letter-spacing:.06em;text-transform:uppercase}
+#labPick small{color:var(--muted);font-size:12px}
+#labPick .x{position:absolute;right:6px;top:6px;padding:2px 9px}
+#labPick .toolbar button{font-size:13px;padding:6px 9px}
+.chips button.pri{background:var(--accent);color:#14110a;border-color:var(--accent)}
 #labActs{display:flex;gap:6px;padding:8px 10px calc(8px + var(--sab));border-top:1px solid rgba(255,255,255,.1)}
 #labActs button{flex:1;font-family:var(--disp);font-weight:800;font-size:16px;letter-spacing:.08em;text-transform:uppercase;padding:9px 4px;border-radius:3px}
 #labActs .pri{background:var(--accent);color:#14110a;border-color:var(--accent)}
@@ -225,6 +238,7 @@ body:has(#menu:not(.hidden)) #hud,body:has(#menu:not(.hidden)) #fps,body:has(#la
   </div>
   <div id="gaugeWrap"><canvas id="gauge" width="660" height="400"></canvas></div>
   <div id="toast"></div>
+  <div id="bag"></div>
   <div id="topbtns">
     <button id="bWalk">Walk (F)</button><button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
   </div>

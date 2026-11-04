@@ -1,9 +1,12 @@
 // Building recipes: only a few numbers. The Building Engineer decides everything else (structure, sizes, layout, colours).
 export const RECIPES = {
-  house: { w: 10, d: 8, floors: 2, garage: true, balcony: true },
-  houseSmall: { w: 8, d: 7, floors: 2, balcony: true },
-  shop: { w: 14, d: 9, floors: 2, storefront: true, system: 'frame' },
-  tower: { w: 14, d: 14, floors: 6, storefront: true, system: 'frame' },
+  // Architect briefs: kind, size, floors and style. The Architect (engines/buildings/architect.js) designs rooms, stairs, doors, windows, furniture and facade.
+  house: { brief: { kind: 'house', w: 11.5, d: 9.5, floors: 2, garage: true, style: 'modern' } },
+  houseSmall: { brief: { kind: 'house', w: 8, d: 8.5, floors: 2, style: 'classic' } },
+  villa: { brief: { kind: 'house', w: 12, d: 10, floors: 3, style: 'dark', garage: true } },
+  shop: { brief: { kind: 'house', w: 12, d: 9, floors: 2, shopGround: true, style: 'brick' } },
+  market: { brief: { kind: 'market', w: 12, d: 8 } },
+  tower: { brief: { kind: 'tower', w: 16, d: 13, floors: 8, style: 'glass' } },
 };
 
 // Free-form recipes: lists of shape primitives (see engines/buildings/shapes.js). No code needed to add a new building.

@@ -167,6 +167,23 @@ const inp = { throttle: 0, brake: 0, steer: 0, hb: 0 };
 let kbThr = 0, kbBrk = 0, pedThr = 0, pedBrk = 0, steerKb = 0, tiltSteer = 0, touchSteer = 0, touchGas = 0, touchBrk = 0, touchHb = 0, touchHorn = 0;
 let horn = false;
 const person = new Person(ctx);
+// ---------- everyday life: market, fridge, stove, table, bed ----------
+const life = { cash: 500, veg: 0, meal: 0, hunger: 60, cooking: 0 };
+function bag() { const e = $('bag'); if (e) { e.style.display = person.active ? 'block' : 'none'; e.innerHTML = `<b>Rs ${life.cash}</b> &nbsp; Vegetables ${life.veg} &nbsp; Meals ${life.meal} &nbsp; Hunger ${Math.round(life.hunger)}%`; } }
+function useThing(act) {
+  if (act === 'market') { if (life.cash < 40) { toast('Not enough cash', 'Market'); return; } life.cash -= 40; life.veg += 1; toast('Bought 1 kg vegetables  -Rs 40', 'Market'); }
+  else if (act === 'stove') {
+    if (life.cooking > 0) { toast('Still cooking...', 'Kitchen'); return; }
+    if (life.veg < 1) { toast('You need vegetables - buy them from the market', 'Kitchen'); return; }
+    life.veg -= 1; life.cooking = 6; toast('Cooking...', 'Kitchen');
+  }
+  else if (act === 'fridge') toast(`Fridge: ${life.veg} kg vegetables, ${life.meal} meals`, 'Kitchen');
+  else if (act === 'eat') { if (life.meal < 1) { toast('No cooked food yet - cook something first', 'Dining'); return; } life.meal -= 1; life.hunger = Math.max(0, life.hunger - 60); toast('Ate a meal. Hunger down.', 'Dining'); }
+  else if (act === 'sink') toast('Washed hands', 'Kitchen');
+  else if (act === 'bed') toast('Rested for a while', 'Bedroom');
+  bag();
+}
+setInterval(() => { if (life.cooking > 0) { life.cooking -= 1; if (life.cooking <= 0) { life.meal += 1; toast('Meal is ready - eat at the table (F)', 'Kitchen'); } } life.hunger = Math.min(100, life.hunger + 0.15); bag(); }, 1000);
 function toggleWalk() {
   if (menuOpen) return;
   const c = player, b = c.body;
@@ -178,8 +195,11 @@ function toggleWalk() {
     toast('Walking - W/S move, A/D turn, Space run, H jump, F: door / car', '');
     return;
   }
-  // walking: nearest closed door first, then the car
-  if (scene.structures.openDoorNear && scene.structures.openDoorNear(person.feet, 2.2)) { toast('Door opened', ''); return; }
+  // walking: nearest closed door first, then things in the house (stove, market...), then the car
+  const dr = scene.structures.toggleDoorNear && scene.structures.toggleDoorNear(person.feet, 2.0);
+  if (dr) { toast(dr === 'opened' ? 'Door opened' : dr === 'closed' ? 'Door closed' : 'Step out of the doorway first', ''); return; }
+  const use = scene.structures.interactNear && scene.structures.interactNear(person.feet, 1.4);
+  if (use) { useThing(use.act); return; }
   const d = dist3(person.body.pos, b.pos);
   if (d < 4.2 + c.spec.geo.L * 0.3) { person.despawn(); toast('Back in the car', ''); } else toast('Walk to your car, or stand at a door and press F', '');
 }
@@ -739,6 +759,7 @@ function frame(t) {
   r.begin({ eye: camPos, target: camLook, fov: camFov, near: 0.25, far: 9000, shadowCenter: [player.body.pos[0], 0, player.body.pos[2]] });
   fx.beginBlobs();
   scene.draw(camPos);
+  if (lab && lab.active && lab.draw) lab.draw(r);
   for (const c of cars) c.draw();
   person.draw();
   for (const d of deb) drawDebris(ctx, d);
@@ -767,6 +788,6 @@ async function boot() {
   syncMenu();
   $('loading').style.display = 'none';
   requestAnimationFrame((t) => { last = t / 1000; frame(t); });
-  window.__game = { get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
+  window.__game = { life, get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
 }
 setTimeout(() => { boot().catch((e) => { console.error(e); $('loading').innerHTML = '<div style="padding:24px;text-align:center">Failed to start: ' + String(e.message || e).slice(0, 300) + '</div>'; }); }, 30);

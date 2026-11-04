@@ -56,8 +56,10 @@ export function shapeElements(shapes, add, newRun) {
   };
 
   // ---- one straight or curved wall run, cut by its openings. Opening columns are cut into thin strips so the wall edge follows the profile.
-  const wallRows = (pt, tan, y0, h, len, th, mat, gaps, run, sBase, nOut, f, wmax) => {
-    const gs = (gaps || []).map((g) => ({ ...g, h: g.h ?? 2.1, sill: g.sill || 0, profile: openProfile({ ...g, h: g.h ?? 2.1 }) })).sort((p, q) => p.a - q.a);
+  // Doors become ONE hinged leaf (so they can swing open and shut); windows get a real frame, glazing bars and sills set into the wall depth.
+  const decoBox = (host, c, X, Y, Z, hx, hy, hz, tint, f) => add({ deco: true, host: host ? host.id : null, kind: 'deco', mat: 'wood', tint, f: f || 0, cx: c[0], cy: c[1], cz: c[2], hx, hy, hz, q: quatFromBasis(X, Y, Z) });
+  const wallRows = (pt, tan, y0, h, len, th, mat, gaps, run, sBase, nOut, f, wmax, ex = {}, kind0 = 'wall', str0 = true) => {
+    const gs = (gaps || []).map((g) => ({ ...g, h: g.h ?? 2.1, sill: g.sill || 0 })).map((g) => ({ ...g, profile: openProfile(g) })).sort((p, q) => p.a - q.a);
     const cols = [];   // {sa,sb,gap|null}
     let cur = 0;
     const plain = (s0, s1) => { const n = Math.max(1, Math.ceil((s1 - s0) / wmax - 1e-6)); for (let i = 0; i < n; i++) cols.push({ sa: s0 + ((s1 - s0) * i) / n, sb: s0 + ((s1 - s0) * (i + 1)) / n, gap: null }); };
@@ -69,29 +71,66 @@ export function shapeElements(shapes, add, newRun) {
       cur = Math.min(len, g.a + g.wid);
     }
     if (len > cur + 0.02) plain(cur, len);
-    const out = (sa, sb, ya, yb, kind, mat2, str) => {
-      if (yb - ya < 0.04 || sb - sa < 0.03) return;
+    const out = (sa, sb, ya, yb, kind, mat2, str, single, rest2) => {
+      if (yb - ya < 0.04 || sb - sa < 0.03) return null;
       const sm = (sa + sb) / 2, p = pt(sm), n = nOut(sm);
-      const nr = Math.max(1, Math.ceil((yb - ya) / ROW_H - 1e-6));
+      const nr = single ? 1 : Math.max(1, Math.ceil((yb - ya) / ROW_H - 1e-6));
+      let first = null;
       for (let rr = 0; rr < nr; rr++) {
         const yA = ya + ((yb - ya) * rr) / nr, yB = ya + ((yb - ya) * (rr + 1)) / nr;
         // widen slightly on curved runs so neighbouring flat panels close the wedge gap on the outer face
-        const wlen = (sb - sa) + 0.02 + (wmax < PANEL_W ? th * 0.12 : 0);
-        panel(kind, mat2, str, [p[0], (yA + yB) / 2, p[2]], [0, 1, 0], n, wlen, yB - yA, kind === 'pane' ? 0.04 : th, run, sBase + sa, sBase + sb, { f });
+        const wlen = (sb - sa) + (single ? 0 : 0.02) + (wmax < PANEL_W ? th * 0.12 : 0);
+        const e = panel(kind, mat2, str, [p[0], (yA + yB) / 2, p[2]], [0, 1, 0], n, wlen, yB - yA, kind === 'pane' ? Math.min(0.04, th) : kind === 'door' ? Math.min(0.05, th) : th, run, sBase + sa, sBase + sb, { f, rest: { ...ex, ...(rest2 || {}) } });
+        first = first || e;
       }
+      return first;
+    };
+    // frame bars around an opening (visual only; they live and die with the glazing / door leaf)
+    const frame = (g, host, jambOnly) => {
+      const sm = g.a + g.wid / 2, c0 = pt(sm), n = nOut(sm), X = norm(cross([0, 1, 0], n)), Y = [0, 1, 0];
+      const sill = y0 + g.sill, top = y0 + Math.min(g.h, h - 0.05);
+      const tint = ex.trim || '#2e3135';
+      const bar = (along, yc, wl, hh, dep, off, tn) => decoBox(host, [c0[0] + X[0] * along + n[0] * off, yc, c0[2] + X[2] * along + n[2] * off], X, Y, n, wl / 2, hh / 2, dep / 2, tn || tint, f);
+      const wf = 0.06, dp = Math.min(0.1, th * 0.5);
+      bar(-g.wid / 2 + wf / 2, (sill + top) / 2, wf, top - sill, dp, 0);           // left jamb
+      bar(g.wid / 2 - wf / 2, (sill + top) / 2, wf, top - sill, dp, 0);            // right jamb
+      if (g.kind === 'arch' || g.kind === 'pointed' || g.kind === 'round') return;
+      bar(0, top - wf / 2, g.wid, wf, dp, 0);                                       // head
+      if (jambOnly) return;
+      bar(0, sill + wf / 2, g.wid, wf, dp, 0);                                      // bottom rail
+      if (g.wid > 1.25) bar(0, (sill + top) / 2, 0.04, top - sill, dp * 0.8, 0);   // mullion
+      if (top - sill > 1.5) bar(0, sill + (top - sill) * 0.72, g.wid, 0.04, dp * 0.8, 0);   // transom
+      // outer sill (projects past the wall face) and inner window board
+      const o = th / 2;
+      const sillTint = ex.sill || '#cfcac0';
+      bar(0, sill - 0.025, g.wid + 0.24, 0.05, 0.14, o + 0.03, sillTint);
+      bar(0, sill + 0.005, g.wid + 0.1, 0.03, 0.10, -o + 0.04, sillTint);
+      if (ex.chajja) bar(0, top + 0.06, g.wid + 0.5, 0.06, 0.45, o + 0.2, sillTint);
     };
     for (const c of cols) {
-      if (!c.gap) { out(c.sa, c.sb, y0, y0 + h, 'wall', mat, true); continue; }
+      if (!c.gap) { out(c.sa, c.sb, y0, y0 + h, kind0, mat, str0); continue; }
       const g = c.gap, sm = (c.sa + c.sb) / 2 - g.a;
       // evaluate the profile at the strip centre (rect: constant)
       const [lo, hi] = g.profile(Math.min(g.wid, Math.max(0, sm)));
       const yLo = y0 + lo, yHi = y0 + Math.min(hi, h - 0.05);
       if (lo > 0.04) out(c.sa, c.sb, y0, yLo, 'wall', mat, true);                     // sill / below the round head
       out(c.sa, c.sb, yHi, y0 + h, 'lintel', 'rcc', false);                          // lintel (RCC beam / arch ring) above the hole
-      if (g.pane || g.door) out(c.sa, c.sb, yLo, yHi, g.door ? 'door' : 'pane', g.door ? 'wood' : 'glass', false);
+      if (g.door) {
+        const leafTop = g.kind === 'arch' ? Math.max(g.sill + 0.3, g.h - g.wid / 2) : Math.min(g.h, h - 0.05);
+        if (yHi > y0 + leafTop + 0.05) out(c.sa, c.sb, y0 + leafTop, yHi, 'pane', 'glass', false);   // fan-light above the leaf
+        if (!g._leaf) {
+          g._leaf = true;
+          const e = out(g.a + 0.02, g.a + g.wid - 0.02, y0 + g.sill, y0 + leafTop, 'door', 'wood', false, true, { hinge: g.hinge || 'L', garage: !!g.garage });
+          frame({ ...g, h: g.sill + (leafTop) }, e, true);
+        }
+      } else if (g.pane) {
+        const e = out(c.sa, c.sb, yLo, yHi, 'pane', 'glass', false);
+        if (e && !g._deco) { g._deco = true; frame(g, e, false); }
+      }
     }
   };
 
+  const exOf = (S) => { const o = {}; for (const k of ['tint', 'interior', 'anchored', 'parapet', 'railing', 'src', 'slabLook', 'roof', 'stair', 'tag', 'cant', 'fin', 'ghost', 'trim', 'sill', 'chajja', 'doorTint']) if (S[k] !== undefined) o[k] = S[k]; if (S.interior) o.out = null; return o; };
   let runId = 100000;
   for (const S of shapes) {
     const mat = S.mat || 'rcc';
@@ -99,11 +138,11 @@ export function shapeElements(shapes, add, newRun) {
       const dx = S.x1 - S.x0, dz = S.z1 - S.z0, L = Math.hypot(dx, dz), tx = dx / L, tz = dz / L;
       const n = [tz, 0, -tx];   // outward = to the right of the walking direction (flip with S.flip)
       if (S.flip) { n[0] = -n[0]; n[2] = -n[2]; }
-      wallRows((s) => [S.x0 + tx * s, 0, S.z0 + tz * s], () => [tx, 0, tz], S.y0 || 0, S.h, L, S.thick || 0.23, mat, S.gaps, runId++, 0, () => n, S.f || 0, PANEL_W);
+      wallRows((s) => [S.x0 + tx * s, 0, S.z0 + tz * s], () => [tx, 0, tz], S.y0 || 0, S.h, L, S.thick || 0.23, mat, S.gaps, runId++, 0, () => n, S.f || 0, PANEL_W, exOf(S), S.kind || 'wall', S.str ?? true);
     } else if (S.t === 'arc') {
       const a0 = S.a0 ?? 0, a1 = S.a1 ?? Math.PI * 2, L = S.r * (a1 - a0);
       const ang = (s) => a0 + s / S.r;
-      wallRows((s) => [S.cx + Math.cos(ang(s)) * S.r, 0, S.cz + Math.sin(ang(s)) * S.r], (s) => [-Math.sin(ang(s)), 0, Math.cos(ang(s))], S.y0 || 0, S.h, L, S.thick || 0.23, mat, S.gaps, runId++, 0, (s) => (S.inward ? [-Math.cos(ang(s)), 0, -Math.sin(ang(s))] : [Math.cos(ang(s)), 0, Math.sin(ang(s))]), S.f || 0, Math.min(PANEL_W, Math.max(0.35, Math.sqrt(8 * S.r * 0.03))));
+      wallRows((s) => [S.cx + Math.cos(ang(s)) * S.r, 0, S.cz + Math.sin(ang(s)) * S.r], (s) => [-Math.sin(ang(s)), 0, Math.cos(ang(s))], S.y0 || 0, S.h, L, S.thick || 0.23, mat, S.gaps, runId++, 0, (s) => (S.inward ? [-Math.cos(ang(s)), 0, -Math.sin(ang(s))] : [Math.cos(ang(s)), 0, Math.sin(ang(s))]), S.f || 0, Math.min(PANEL_W, Math.max(0.35, Math.sqrt(8 * S.r * 0.03))), exOf(S), S.kind || 'wall', S.str ?? true);
     } else if (S.t === 'dome' || S.t === 'tower') {
       // a surface of revolution made of rings of panels; each ring knows its slope, so panels tilt to follow the shell
       const rings = S.rings || S.rows || 6, th = S.thick || 0.2;
@@ -128,9 +167,17 @@ export function shapeElements(shapes, add, newRun) {
           panel('wall', mat, true, [S.cx + ca * rm, ym, S.cz + sa * rm], m, n, wid, ml * 1.03, th, run, s0, s1, { f: S.f || 0 });
         }
       }
+    } else if (S.t === 'beam') {
+      const dx = S.x1 - S.x0, dy = S.y1 - S.y0, dz = S.z1 - S.z0, L = Math.hypot(dx, dy, dz) || 1;
+      const X = [dx / L, dy / L, dz / L];
+      let Z = Math.abs(X[1]) > 0.99 ? [0, 0, 1] : norm(cross(X, [0, 1, 0]));
+      const Y = norm(cross(Z, X));
+      decoBox(null, [(S.x0 + S.x1) / 2, (S.y0 + S.y1) / 2, (S.z0 + S.z1) / 2], X, Y, Z, L / 2, (S.h || 0.05) / 2, (S.w || 0.05) / 2, S.tint, S.f || 0);
+    } else if (S.t === 'box' && S.deco) {
+      decoBox(null, [S.cx, (S.y0 || 0) + S.h / 2, S.cz], [1, 0, 0], [0, 1, 0], [0, 0, 1], S.w / 2, S.h / 2, S.d / 2, S.tint, S.f || 0);
     } else if (S.t === 'box') {
       const o = { w: S.w, d: S.d, h: S.h };
-      panel('wall', 'rcc', true, [S.cx, (S.y0 || 0) + S.h / 2, S.cz], [0, 1, 0], [0, 0, 1], S.w, S.h, S.d, runId++, 0, S.w, { f: S.f || 0, rest: { solidBlock: true } });
+      panel('wall', S.mat || 'rcc', true, [S.cx, (S.y0 || 0) + S.h / 2, S.cz], [0, 1, 0], [0, 0, 1], S.w, S.h, S.d, runId++, 0, S.w, { f: S.f || 0, rest: { solidBlock: true, ...exOf(S) } });
     } else if (S.t === 'col') {
       add({ kind: 'col', mat: 'rcc', str: true, f: S.f || 0, run: null, axis: 'x', s0: 0, s1: 0, cx: S.cx, cy: (S.y0 || 0) + S.h / 2, cz: S.cz, hx: S.s / 2, hy: S.h / 2, hz: S.s / 2, out: null, interior: false });
     }

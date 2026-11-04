@@ -5,7 +5,7 @@ import { qRot } from './math.js';
 let BODY_ID = 1;
 const ZERO9 = new Float64Array(9);
 
-export const GROUP = { CAR: 1, PROP: 2, DEBRIS: 4, STATIC: 8, ALL: 0xffff };
+export const GROUP = { CAR: 1, PROP: 2, DEBRIS: 4, STATIC: 8, STAIR: 16, ALL: 0xffff };
 
 function quatAxes(q, m) {
   const x = q[0], y = q[1], z = q[2], w = q[3];

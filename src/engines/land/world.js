@@ -178,6 +178,9 @@ export class Scene {
     S.addBuilding({ recipe: 'house', x: -48, z: -70 });
     S.addBuilding({ recipe: 'houseSmall', x: 50, z: -90 });
     S.addBuilding({ recipe: 'shop', x: -52, z: -112 });
+    S.addBuilding({ recipe: 'market', x: 52, z: -50 });          // vegetables: walk in and buy (F at the counter)
+    S.addBuilding({ recipe: 'villa', x: -100, z: -120 });
+    S.addBuilding({ recipe: 'tower', x: 118, z: -80 });
   S.addBuilding({ recipe: 'mandir', x: 95, z: -150 });          // indestructible temple (free-form shape engine)
   S.addBuilding({ recipe: 'roundTower', x: -105, z: -60 });
     // end wall of the runway (stacked concrete blocks)
