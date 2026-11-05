@@ -115,6 +115,63 @@ export class Vehicle {
     this.revLimiter = false;
   }
 
+  // ---- test tuning: top speed box. Power, torque, redline, gearing, grip and brakes are re-derived so the car really gets to the speed, fast and stable.
+  setTop(kmh) {
+    if (!this.spec0) this.spec0 = this.spec;
+    const s0 = this.spec0;
+    this.topKmh = kmh > 0 ? kmh : 0;
+    this.body.vmax = this.topKmh ? Math.max(160, (this.topKmh / 3.6) * 1.25) : 0;
+    if (!this.topKmh) { this.spec = s0; this.P = prepare(s0); this.hyperOn = false; this.gripK = 1; this.brakeK = 1; return this.spec; }
+    const vt = this.topKmh / 3.6, kk = this.topKmh / s0.vmax;
+    if (kk <= 1.02) {                                         // slower than stock: just a governor
+      const s2 = { ...s0, vmax: this.topKmh, vNat: Math.max(s0.vNat || 0, this.topKmh * 1.05), _p: undefined };
+      this.spec = s2; this.P = prepare(s2); this.hyperOn = false; this.gripK = 1; this.brakeK = 1; return s2;
+    }
+    const Tacc = 2.8;                                          // seconds the car should need to reach the top speed
+    const hp = Math.max(s0.hp, (0.5 * s0.kg * vt * vt) / (Tacc * 745.7));
+    const s2 = {
+      ...s0, hp, nm: Math.round(s0.nm * (hp / s0.hp) ** 0.9), vmax: this.topKmh, vNat: this.topKmh * 1.3,
+      redline: Math.round(s0.redline * (1 + Math.min(0.6, Math.log10(kk) * 0.45)) / 100) * 100,
+      vFirst: s0.vFirst * Math.min(kk, 6), shiftTime: Math.min(s0.shiftTime, 0.07), _p: undefined,
+    };
+    const aimG = vt / Tacc / G;
+    const drvFrac = s0.drive === 'AWD' ? 1 : s0.drive === 'FWD' ? 1 - s0.geo.wR : s0.geo.wR;      // share of the weight on the driven wheels
+    this.gripK = clamp((aimG * 0.85) / (s0.mu * Math.max(0.4, drvFrac)), 1.2, 100);
+    this.brakeK = this.gripK * 2.6;
+    this.hyperOn = true;
+    this.spec = s2; this.P = prepare(s2);
+    this.P.bMax = this.P.bMax.map((x) => x * this.brakeK);
+    this.P.Iw *= clamp(this.gripK * 0.25, 1, 6);                 // heavier wheel inertia: with this much grip a light wheel would flip between locked and spinning every step
+    return s2;
+  }
+
+  // continuous collision: at very high speed the car moves several metres per physics step, so look ahead for fixed walls and
+  // shorten this step's travel to just reach the wall; the full speed is given back afterwards so the impact itself is at full speed.
+  ccdBegin(dt) {
+    const b = this.body, v = b.v, sp = Math.hypot(v[0], v[2]);
+    this._ccd = null;
+    if (sp * dt < 1.0) return;
+    const g = this.spec.geo, R = b.R, dx = v[0] / sp, dz = v[2] / sp;
+    const half = g.L * 0.5, move = sp * dt;
+    let best = Infinity;
+    for (const off of [0, 0.45, -0.45]) for (const hy of [0.05, 0.5]) {
+      const lat = off * g.W;
+      const o = [b.pos[0] + R[0] * lat, b.pos[1] + hy, b.pos[2] + R[2] * lat];
+      const t = this.world.rayFixed(o, [dx, 0, dz], move + half + 0.6);
+      if (t < best) best = t;
+    }
+    if (best - half < -0.02 || best - half > move) return;          // already touching (the solver sees it) or nothing to hit this step
+    const k = clamp((best - half + 0.05) / move, 0.003, 1);
+    this._ccd = { k, v0: [v[0], v[1], v[2]] };
+    v[0] *= k; v[1] *= k; v[2] *= k;
+  }
+  ccdEnd() {
+    const c = this._ccd; if (!c) return;
+    const v = this.body.v, f = 1 - c.k;
+    v[0] += c.v0[0] * f; v[1] += c.v0[1] * f; v[2] += c.v0[2] * f;
+    this._ccd = null;
+  }
+
   reset(pos, yaw = 0) {
     const b = this.body, g = this.spec.geo;
     const q = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
@@ -156,6 +213,13 @@ export class Vehicle {
   step(dt) {
     const b = this.body, P = this.P, s = this.spec, g = s.geo;
     if (b.sleeping) return;
+    if (!(isFinite(b.pos[0] + b.pos[1] + b.pos[2] + b.v[0] + b.v[1] + b.v[2] + b.w[0] + b.w[1] + b.w[2]))) { const g0 = this.spec.geo; const lp = this._lastGood || [0, g0.cgY + 0.2, 0]; this.reset([lp[0], 0, lp[2]], 0); }
+    else if (this.hyperOn) {                                  // keep the solver sane at extreme speed
+      const cap = (this.topKmh / 3.6) * 1.2, sp0 = Math.hypot(b.v[0], b.v[1], b.v[2]);
+      if (sp0 > cap) { const k = cap / sp0; b.v[0] *= k; b.v[1] *= k; b.v[2] *= k; }
+      const wl = Math.hypot(b.w[0], b.w[1], b.w[2]); if (wl > 30) { const k = 30 / wl; b.w[0] *= k; b.w[1] *= k; b.w[2] *= k; }
+    }
+    this._lastGood = [b.pos[0], b.pos[1], b.pos[2]];
     const R = b.R;
     const up = [R[3], R[4], R[5]], fwd = [-R[6], -R[7], -R[8]], right = [R[0], R[1], R[2]];
     const v = b.v;
@@ -207,7 +271,8 @@ export class Vehicle {
     if (this.shiftT > 0) this.shiftT -= dt;
     // traction control
     let tcF = 1;
-    if (this.assist >= 2 && inp.brake < 0.3) {
+    const tcOn = this.tcMode === 'off' ? false : this.tcMode === 'on' ? true : (this.assist >= 2 || !!this.hyperOn);
+    if (tcOn && inp.brake < 0.3) {
       let mx = 0;
       for (const w of drv) mx = Math.max(mx, w.tcSlip || 0);
       if (mx > 0.3) { tcF = clamp(1 - (mx - 0.3) * 2.5, 0.3, 1); this.tcAct = 1; } else this.tcAct *= 0.9;
@@ -323,12 +388,12 @@ export class Vehicle {
         t += clamp((mate.omega - w.omega) * s.lsd * 0.5, -lim, lim);
       }
       Tdrv[i] = t;
-      if (this.assist >= 2 && inp.brake < 0.3) {
+      if (tcOn && inp.brake < 0.3) {
         const capF = clamp(1 - ((w.tcSlip || 0) - 0.25) * 3, 0.3, 1);
         capT[i] = 0.97 * capF * (w.FmaxPrev || 0) * w.R + 40;
       }
     }
-    if (this.assist >= 2 && inp.brake < 0.3) {
+    if (tcOn && inp.brake < 0.3) {
       let left = 0, head = 0;
       for (let i = 0; i < 4; i++) {
         if (Math.abs(Tdrv[i]) > capT[i]) { left += Tdrv[i] - Math.sign(Tdrv[i]) * capT[i]; Tdrv[i] = Math.sign(Tdrv[i]) * capT[i]; this.tcAct = 1; }
@@ -397,7 +462,7 @@ export class Vehicle {
       const KP = 0.12, TP = 0.13;
       const loadRef = (s.kg * G) / 4;
       const muEff = s.mu * clamp(1 - 0.2 * (Fn / loadRef - 1), 0.62, 1.2) * (w.flat ? 0.35 : 1) * (1 - 0.25 * (1 - clamp(w.health, 0, 1)));
-      const mu = muEff * (w.surface ? 0.68 : 1);
+      const mu = muEff * (w.surface ? 0.68 : 1) * (this.gripK || 1);
       const launchB = 1 + 0.3 * clamp(1 - Math.abs(vf) / 30, 0, 1);
       const Fmax = mu * Fn * launchB;
       const FmaxY = s.constLat ? mu * loadRef : mu * Fn;
@@ -433,12 +498,32 @@ export class Vehicle {
       let om = w.omega + dOm;
       if (om * w.omega < 0 && Tb + Trr > 0) om = 0; // brake can't reverse the wheel
       let FxEnd = Fx + D * (om - w.omega);
+      if (this.hyperOn) {
+        // extreme grip: integrate the wheel in small sub-steps so lock / spin cannot flip every physics step
+        const ns = 12, hh = dt / ns; let o2 = w.omega, fs = 0;
+        for (let k = 0; k < ns; k++) {
+          const kp = (o2 * w.R - vlong) / vden, sx = kp / KP, sy = vlat / vden / TP, sg2 = Math.hypot(sx, sy);
+          let fxk = sg2 < 1e-6 ? 0 : Fmax * Math.sin(1.5 * Math.atan(1.732 * sg2)) * sx / sg2;
+          const lim = (0.6 * Iw * Math.abs(o2 - vlong / w.R)) / (w.R * hh) + 60;      // the road cannot do more than bring the wheel to ground speed within the sub-step
+          if (Math.abs(fxk) > lim) fxk = Math.sign(fxk) * lim;
+          let no;
+          if (o2 === 0 && Math.abs(Tdrive - w.R * fxk) <= Tb + Trr) no = 0;          // locked wheel stays locked while the brake can hold it (stick-slip)
+          else { no = o2 + (Tdrive - (Tb + Trr) * clamp(o2 / 0.12, -1, 1) - w.R * fxk) * hh / Iw; if (no * o2 < 0 && Tb + Trr > 0) no = 0; }
+          o2 = no; fs += fxk;
+        }
+        om = o2; FxEnd = fs / ns;
+      }
       FxEnd = clamp(FxEnd, -Fmax * 1.05, Fmax * 1.05);
       if (FxEnd * vlong < 0) { const cap = (0.3 * mc * Math.max(Math.abs(vlong), 0.6)) / dt; if (Math.abs(FxEnd) > cap) FxEnd = Math.sign(FxEnd) * cap; }
+      if (this.hyperOn && brk > 0.2 && inp.throttle < 0.1) {   // braking to a stop: never push harder than what is needed to stop this wheel's share of the car (no forward / backward rocking)
+        const cap2 = (0.45 * mc * Math.max(Math.abs(vlong), 0.25)) / dt;
+        if (Math.abs(FxEnd) > cap2) FxEnd = Math.sign(FxEnd) * cap2;
+        if (Math.abs(vlong) < 1.0) om = 0;
+      }
       w.omega = om;
       w.Fx = FxEnd; w.Fy = Fy; w.T0 = T0[0];
       b.applyForce(n[0] * Fn, n[1] * Fn, n[2] * Fn, cp[0], cp[1], cp[2]);
-      const rcH = s.rc ?? 0.18;
+      const rcH = this.hyperOn ? g.cgY : (s.rc ?? 0.18);
       b.applyForce(fx * FxEnd + lx * Fy, fy * FxEnd + ly * Fy, fz * FxEnd + lz * Fy, cp[0] + n[0] * rcH, cp[1] + n[1] * rcH, cp[2] + n[2] * rcH);
       w.spin += w.omega * dt;
     }

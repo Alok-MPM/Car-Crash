@@ -74,6 +74,16 @@ addEventListener('resize', resize);
 
 // ---------- cars ----------
 const SPAWN = { pos: [0, 0, 40], yaw: 0 };
+// ---------- test tuning box: type a top speed, the car gets the power / torque / grip / brakes for it ----------
+let topSet = 0, tcMode = 'auto';
+function applyTop(kmh) {
+  if (!player) return;
+  const sp = player.vehicle.setTop(kmh);
+  player.spec = sp; player.vehicle.tcMode = tcMode;
+  const box = $('spdIn'); if (box) box.value = kmh ? Math.round(kmh) : '';
+  toast(kmh ? `Top speed ${Math.round(kmh)} km/h  -  ${Math.round(sp.hp).toLocaleString()} hp` : 'Stock engine', 'Test tuning');
+}
+
 function makePlayer(keepPose) {
   const spec = getCar(S.car);
   let pos = SPAWN.pos, yaw = SPAWN.yaw;
@@ -82,6 +92,7 @@ function makePlayer(keepPose) {
   c.vehicle.reset(pos, yaw);
   cars.unshift(c);
   player = c;
+  if (topSet) applyTop(topSet);
   stats.top = stats.top || 0;
   stats.armed = true; stats.t100 = null; stats.t200 = null;
   return c;
@@ -169,7 +180,7 @@ let horn = false;
 const person = new Person(ctx);
 // ---------- everyday life: market, fridge, stove, table, bed ----------
 const life = { cash: 500, veg: 0, meal: 0, hunger: 60, cooking: 0 };
-function bag() { const e = $('bag'); if (e) { e.style.display = person.active ? 'block' : 'none'; e.innerHTML = `<b>Rs ${life.cash}</b> &nbsp; Vegetables ${life.veg} &nbsp; Meals ${life.meal} &nbsp; Hunger ${Math.round(life.hunger)}%`; } }
+function bag() { const bc = $('bCar'); if (bc) bc.style.display = person.active ? '' : 'none'; const e = $('bag'); if (e) { e.style.display = person.active ? 'block' : 'none'; e.innerHTML = `<b>Rs ${life.cash}</b> &nbsp; Vegetables ${life.veg} &nbsp; Meals ${life.meal} &nbsp; Hunger ${Math.round(life.hunger)}%`; } }
 function useThing(act) {
   if (act === 'market') { if (life.cash < 40) { toast('Not enough cash', 'Market'); return; } life.cash -= 40; life.veg += 1; toast('Bought 1 kg vegetables  -Rs 40', 'Market'); }
   else if (act === 'stove') {
@@ -192,7 +203,8 @@ function toggleWalk() {
     const g = c.spec.geo;
     const p = b.toWorld([-(g.W / 2 + 0.7), 0, -g.L * 0.1]);
     person.spawn([p[0], 0.05, p[2]], camYaw);
-    toast('Walking - W/S move, A/D turn, Space run, H jump, F: door / car', '');
+    bag();
+    toast('Walking - doors open by themselves. Car button: back in the car from anywhere', '');
     return;
   }
   // walking: nearest closed door first, then things in the house (stove, market...), then the car
@@ -200,11 +212,12 @@ function toggleWalk() {
   if (dr) { toast(dr === 'opened' ? 'Door opened' : dr === 'closed' ? 'Door closed' : 'Step out of the doorway first', ''); return; }
   const use = scene.structures.interactNear && scene.structures.interactNear(person.feet, 1.4);
   if (use) { useThing(use.act); return; }
-  const d = dist3(person.body.pos, b.pos);
-  if (d < 4.2 + c.spec.geo.L * 0.3) { person.despawn(); toast('Back in the car', ''); } else toast('Walk to your car, or stand at a door and press F', '');
+  backToCar();
 }
-addEventListener('keydown', (e) => { if (e.code === 'KeyF' && !e.repeat) toggleWalk(); });
+function backToCar() { if (!person.active) return; person.despawn(); bag(); toast('Back in the car', ''); }
+addEventListener('keydown', (e) => { if (e.target && e.target.tagName === 'INPUT') return; if (e.code === 'KeyF' && !e.repeat) toggleWalk(); });
 addEventListener('keydown', (e) => {
+  if (e.target && e.target.tagName === 'INPUT') return;
   if (e.repeat) { if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault(); return; }
   keys[e.code] = true;
   if (e.code === 'KeyC') cycleCam();
@@ -316,11 +329,12 @@ const CAMS = ['Chase', 'Far chase', 'Hood', 'Bumper', 'Orbit', 'TV'];
 let camMode = 0;
 let camPos = [0, 3, 60], camYaw = 0, camLook = [0, 1, 0], camFov = 60, orbitYaw = 0.6, orbitPitch = 0.22, orbitDist = 7.5, tvPos = null;
 function cycleCam() { camMode = (camMode + 1) % CAMS.length; tvPos = null; toast(CAMS[camMode] + ' cam', ''); }
-let dragging = false, lastX = 0, lastY = 0;
-$('gl').addEventListener('pointerdown', (e) => { if (!menuOpen && camMode !== 4) { /* tap to cycle? keep quiet */ } dragging = true; lastX = e.clientX; lastY = e.clientY; });
-addEventListener('pointerup', () => (dragging = false));
+let dragging = false, dragId = -1, lastX = 0, lastY = 0;
+$('gl').addEventListener('pointerdown', (e) => { dragging = true; dragId = e.pointerId; lastX = e.clientX; lastY = e.clientY; });
+addEventListener('pointerup', (e) => { if (e.pointerId === dragId) dragging = false; });
+addEventListener('pointercancel', (e) => { if (e.pointerId === dragId) dragging = false; });
 addEventListener('pointermove', (e) => {
-  if (!dragging) return;
+  if (!dragging || e.pointerId !== dragId) return;
   if (camMode === 4 || menuOpen) { orbitYaw -= (e.clientX - lastX) * 0.006; orbitPitch = clamp(orbitPitch + (e.clientY - lastY) * 0.005, -0.1, 1.2); }
   lastX = e.clientX; lastY = e.clientY;
 });
@@ -430,6 +444,16 @@ function repair() {
   c.vehicle.reset(pos, yaw);
   cars.unshift(c); player = c;
   toast('Repaired', 'Fresh from the shop');
+}
+let streetIx = 0;
+function gotoStreet() {
+  if (!player || !scene.streets || !scene.streets.length) return;
+  const n = scene.streets.length, k = streetIx++ % (n * 2), st = scene.streets[k >> 1], back = k & 1;
+  if (person.active) backToCar();
+  const yaw = back ? Math.PI : 0, z = back ? st.zBackFar : st.zFar;
+  player.vehicle.reset([st.x, 0, z], yaw);
+  camYaw = yaw;
+  toast(`${st.name} - ${back ? 'back' : 'front'} road, drive straight in`, 'Test street');
 }
 function spawnAhead() {
   if (!player) return;
@@ -649,11 +673,22 @@ $('nPaint').onclick = () => { const sw = $('swatches'); sw.style.outline = '2px 
 $('nLab').onclick = () => { if (window.openLab) window.openLab(); };
 addEventListener('keydown', (e) => { if (!menuOpen) return; if (e.code === 'ArrowLeft') stepCar(-1); else if (e.code === 'ArrowRight') stepCar(1); else if (e.code === 'Enter') $('go').click(); });
 function toggleMenu() { menuOpen = !menuOpen; $('menu').classList.toggle('hidden', !menuOpen); if (menuOpen) { orbitYaw = camYaw + Math.PI + 0.5; openSheet(null); } }
-$('go').onclick = () => { sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
-$('bWalk').onclick = toggleWalk; $('bMenu').onclick = toggleMenu; $('bCam').onclick = cycleCam; $('bRep').onclick = repair; $('bSpawn').onclick = spawnAhead; $('bTod').onclick = nextTod; $('bSlow').onclick = toggleSlow; $('bSnd').onclick = toggleSound;
+$('go').onclick = () => { warmUntil = performance.now() / 1000 + 7; sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
+// HUD buttons fire on pointerdown (not click): a click is dropped while another finger is on the pedals / steering, pointerdown is not
+const tap = (id, fn) => { const el = $(id); el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add('on'); fn(); }); const off = () => el.classList.remove('on'); el.addEventListener('pointerup', off); el.addEventListener('pointercancel', off); el.addEventListener('pointerleave', off); el.addEventListener('click', (e) => e.preventDefault()); };
+{
+  const inEl = $('spdIn'), go = () => { const v = parseFloat(inEl.value); topSet = isFinite(v) && v > 0 ? clamp(v, 30, 5000) : 0; applyTop(topSet); inEl.blur(); };
+  tap('spdSet', go); tap('spdStock', () => { topSet = 0; applyTop(0); });
+  inEl.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') go(); });
+  inEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+  const labels = { auto: 'TC: Auto', on: 'TC: On', off: 'TC: Off' };
+  tap('spdTc', () => { tcMode = tcMode === 'auto' ? 'on' : tcMode === 'on' ? 'off' : 'auto'; $('spdTc').textContent = labels[tcMode]; if (player) player.vehicle.tcMode = tcMode; toast(tcMode === 'off' ? 'Traction control OFF - all the power goes to the tyres' : tcMode === 'on' ? 'Traction control ON' : 'Traction control: auto', ''); });
+}
+tap('bWalk', toggleWalk); tap('bCar', backToCar); tap('bMenu', toggleMenu); tap('bCam', cycleCam); tap('bRep', repair); tap('bSpawn', spawnAhead); tap('bStreet', gotoStreet); tap('bTod', nextTod); tap('bSlow', toggleSlow); tap('bSnd', toggleSound);
 
 // ---------- frame loop ----------
 const H = 1 / 120;
+let warmUntil = performance.now() / 1000 + 6;
 let acc = 0, last = 0, hudAcc = 0, fpsAvg = 16, lowT = 0, highT = 0;
 let engineT = 0;
 function stepPhysics(real) {
@@ -662,8 +697,9 @@ function stepPhysics(real) {
   acc += real * ts;
   let n = 0;
   while (acc >= H && n < 4) {
-    for (const c of cars) { c.vehicle.step(H); }
+    for (const c of cars) { c.vehicle.step(H); if (c.vehicle.hyperOn || c.vehicle.speed > 110) c.vehicle.ccdBegin(H); }
     world.step(H);
+    for (const c of cars) if (c.vehicle._ccd) c.vehicle.ccdEnd();
     ctx.time += H;
     acc -= H; n++;
   }
@@ -679,14 +715,18 @@ function frame(t) {
   fpsAvg = fpsAvg * 0.95 + dt * 1000 * 0.05;
   // load governor: when the frame rate drops under the target, shed detail (particles, rubble, resolution) in steps; recover when there is headroom
   const goal = tgt || 60, fpsNow = 1000 / Math.max(fpsAvg, 1);
-  if (fpsNow < goal * 0.85) { lowT += dt; highT = 0; } else if (fpsNow > goal * 0.97) { highT += dt; lowT = 0; } else { lowT = highT = 0; }
+  // the first seconds after loading / pressing Play are full of one-off work (shader compile, mesh upload, audio start): never shed detail for that
+  const warm = now < warmUntil;
+  if (warm) { lowT = 0; highT = 0; fpsAvg = Math.min(fpsAvg, 1000 / goal * 1.05); if ((ctx.load ?? 1) < 1 || r.dprScale < [0.6, 0.85, 1][S.quality]) { ctx.load = 1; fx.quality = [0.35, 0.7, 1][S.quality]; r.dprScale = [0.6, 0.85, 1][S.quality]; } }
+  else if (dt > 0.09) { /* hitch (one-off), ignore */ }
+  else if (fpsNow < goal * 0.7) { lowT += dt * 1.5; highT = 0; } else if (fpsNow < goal * 0.85) { lowT += dt; highT = 0; } else if (fpsNow > goal * 0.95) { highT += dt; lowT = 0; } else { lowT = highT = 0; }
   const load = ctx.load === undefined ? 1 : ctx.load;
-  if (lowT > 1.2) {
+  if (lowT > 2.0) {
     lowT = 0;
-    if (load > 0.3) { ctx.load = Math.max(0.3, load - 0.15); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
-    else if (r.dprScale > 0.5) { r.dprScale = Math.max(0.5, r.dprScale - 0.1); resize(); }
+    if (load > 0.5) { ctx.load = Math.max(0.5, load - 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
+    else if (r.dprScale > 0.7) { r.dprScale = Math.max(0.7, r.dprScale - 0.1); resize(); }
   }
-  if (highT > 5) {
+  if (highT > 1.5) {
     highT = 0;
     const dm = [0.6, 0.85, 1][S.quality];
     if (r.dprScale < dm) { r.dprScale = Math.min(dm, r.dprScale + 0.05); resize(); }

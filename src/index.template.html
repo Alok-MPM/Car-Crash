@@ -32,9 +32,10 @@ button:active{transform:scale(.97)}
 #gaugeWrap{right:calc(12px + var(--sar,0px));top:calc(64px + var(--sat));width:min(300px,46vw)}
 #gauge{width:100%;display:block}
 #topbtns{right:calc(12px + var(--sar));top:calc(12px + var(--sat));display:flex;gap:8px;pointer-events:auto;flex-wrap:wrap;justify-content:flex-end;max-width:60vw}
-#topbtns button{padding:8px 11px;font-size:13px}
+#topbtns button{padding:8px 11px;font-size:13px;touch-action:none;pointer-events:auto}#topbtns button.on{background:var(--accent);color:#000}.touch #topbtns button{padding:12px 15px}
 #toast{left:50%;top:calc(18% + var(--sat));transform:translateX(-50%);text-align:center;font-size:clamp(18px,3.4vw,30px);font-weight:800;letter-spacing:.02em;text-shadow:0 2px 18px rgba(0,0,0,.7);opacity:0;transition:opacity .25s;white-space:nowrap}
 #toast.show{opacity:1}
+#spd{left:calc(12px + var(--sal,0px));top:calc(292px + var(--sat,0px));pointer-events:auto;background:rgba(10,11,13,.72);border:1px solid rgba(255,255,255,.08);border-left:3px solid var(--accent);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;touch-action:none}#spd b{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}#spd div{display:flex;gap:6px}#spd input{width:96px;font:700 16px system-ui;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:rgba(0,0,0,.45);color:var(--text);touch-action:auto;user-select:text;-webkit-user-select:text}#spd button{padding:6px 10px;font-size:13px;touch-action:none}#spd button.on{background:var(--accent);color:#000}.touch #spd button{padding:10px 12px}
 #bag{display:none;position:absolute;left:50%;bottom:calc(14px + var(--sab,0px));transform:translateX(-50%);padding:8px 14px;background:rgba(14,15,18,.82);border:1px solid rgba(255,255,255,.12);border-left:3px solid var(--accent);font-size:14px;font-weight:600;letter-spacing:.03em;white-space:nowrap}
 #bag b{color:var(--accent)}
 #toast small{display:block;font-size:.5em;font-weight:600;color:var(--accent2);letter-spacing:.14em;text-transform:uppercase}
@@ -91,7 +92,7 @@ button:hover{border-color:rgba(255,255,255,.35)}
 #touch .ctl.on,#touch .ped.on{background:rgba(245,196,0,.28);border-color:var(--accent)}
 #steerKnob{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.45)}
 .ped small{font-family:var(--disp);font-size:18px}
-#gaugeWrap{top:calc(60px + var(--sat))}
+#gaugeWrap{top:calc(118px + var(--sat))}
 
 /* ---------- SHOWROOM / GARAGE ---------- */
 #menu{position:fixed;inset:0;z-index:3;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between}
@@ -238,9 +239,10 @@ body:has(#menu:not(.hidden)) #hud,body:has(#menu:not(.hidden)) #fps,body:has(#la
   </div>
   <div id="gaugeWrap"><canvas id="gauge" width="660" height="400"></canvas></div>
   <div id="toast"></div>
+  <div id="spd"><b>Top speed (km/h)</b><div><input id="spdIn" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="stock" autocomplete="off"><button id="spdSet">Set</button><button id="spdStock">Stock</button></div><button id="spdTc">TC: Auto</button></div>
   <div id="bag"></div>
   <div id="topbtns">
-    <button id="bWalk">Walk (F)</button><button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
+    <button id="bWalk">Walk (F)</button><button id="bCar" style="display:none">Car</button><button id="bCam">Camera</button><button id="bRep">Repair</button><button id="bSpawn">+ Cars</button><button id="bStreet">Street</button><button id="bTod">Sky</button><button id="bSlow">Slow-mo</button><button id="bSnd">Sound</button><button id="bMenu">Garage</button>
   </div>
   <div id="hint"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive &nbsp; <kbd>Space</kbd> handbrake &nbsp; <kbd>C</kbd> camera<br><kbd>Q</kbd> reverse &nbsp; <kbd>R</kbd> flip upright &nbsp; <kbd>E</kbd> repair &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>Esc</kbd> garage</div>
 </div>

@@ -1,5 +1,6 @@
 // Runtime for engineered buildings: turns Building Engineer output into physics panels, one merged mesh per building,
 // layered fracture (paint -> plaster -> brick / concrete -> rebar), load-path collapse, gas-only fires and LOD'd interiors.
+const b0x = (P) => (P.body ? P.body.pos[0] : P.B.x + P.cx), b0z = (P) => (P.body ? P.body.pos[2] : P.B.z + P.cz);
 import { compileDesign, STYLES } from './compile.js';
 import { generate } from './architect.js';
 import { Body, GROUP } from '../../core/physics.js';
@@ -146,7 +147,12 @@ export class Structures {
       if (ov < 0.05) continue;
       if (Math.abs(a.s1 - b.s0) < 0.06) { a.nR.push(b); b.nL.push(a); }
     }
-    for (const it of B.lay.furn) if (it.solid) { const b = new Body({ fixed: true, pos: [B.x + it.x, it.y, B.z + it.z], q: [0, 0, 0, 1], group: GROUP.STATIC, fric: 0.5, rest: 0.05 }); b.addBox([it.hx, it.hy, it.hz]); this.world.add(b); it.body = b; }
+    // furniture is real loose stuff: it has mass, can be pushed, knocked over and smashed through by a car (asleep until something touches it)
+    for (const it of B.lay.furn) if (it.solid) {
+      const mass = Math.max(8, Math.min(450, 8 * it.hx * it.hy * it.hz * (it.act === 'stove' || it.act === 'fridge' ? 380 : 170)));
+      const b = new Body({ mass, pos: [B.x + it.x, it.y + 0.005, B.z + it.z], q: [0, 0, 0, 1], group: GROUP.PROP, fric: 0.6, rest: 0.05, linDamp: 0.25, angDamp: 0.6 });
+      b.addBox([it.hx, it.hy, it.hz]); this.world.add(b); b.sleep(); b.furn = it; it.body = b;
+    }
     this.setupDoors(B);
     this.list.push(B);
     validateBuilding(this, B);
@@ -214,7 +220,8 @@ export class Structures {
       if (R.f === 0) g.box((R.x0 + R.x1) / 2, 0.015, (R.z0 + R.z1) / 2, (R.x1 - R.x0) / 2, 0.015, (R.z1 - R.z0) / 2, (fi) => (fi === 2 ? [T.floor, 1, 1, 1] : null), off, 1, false);
     }
     for (const it of B.lay.furn) {
-      if (it.slab >= 0 && !slabOK.get(it.slab)) { if (it.body) { this.world.remove(it.body); it.body = null; } continue; }
+      if (it.body) continue;                                      // loose furniture is drawn on its own
+      if (it.slab >= 0 && !slabOK.get(it.slab)) continue;
       const c = hexRGB(it.color);
       const tile = it.tile === 'wood' ? T.wood : it.tile === 'fabric' ? T.fabric : it.tile === 'metal' ? T.metal : T.white;
       g.box(it.x, it.y, it.z, it.hx, it.hy, it.hz, () => [tile, c[0], c[1], c[2]], off, 1, false);
@@ -223,6 +230,20 @@ export class Structures {
     B.intMesh = g.n ? this.r.createMesh(g.finish(), { mat: this.material(), radius: B.radius }) : null;
     if (old) this.r.deleteMesh(old);
     B.intDirty = false;
+  }
+
+  furnMesh(it) {
+    const key = ['f', it.tile, it.color, it.hx.toFixed(3), it.hy.toFixed(3), it.hz.toFixed(3)].join('|');
+    let m = this.freeMeshes.get(key);
+    if (!m) {
+      const c = hexRGB(it.color);
+      const tile = it.tile === 'wood' ? T.wood : it.tile === 'fabric' ? T.fabric : it.tile === 'metal' ? T.metal : T.white;
+      const g = new GeoBuf();
+      g.box(0, 0, 0, it.hx, it.hy, it.hz, () => [tile, c[0], c[1], c[2]], [0, 0, 0], 1, false);
+      m = this.r.createMesh(g.finish(), { mat: this.material(), radius: Math.max(it.hx, it.hy, it.hz) * 2 });
+      this.freeMeshes.set(key, m);
+    }
+    return m;
   }
 
   freeMesh(P) {
@@ -341,6 +362,7 @@ export class Structures {
     P._m = new Float32Array(16);
     P.B.checkStab = true;
     P.B.lastWhy = why;
+    for (const it of P.B.lay.furn) if (it.body && it.body.sleeping && Math.abs(P.B.x + it.x - b0x(P)) < 3.2 && Math.abs(P.B.z + it.z - b0z(P)) < 3.2) it.body.wake();
     if (P.f === 0) this.hazardCheck(P.B, P, why === 'hit' ? 1 : 0.4);
   }
 
@@ -388,9 +410,10 @@ export class Structures {
     for (const B of this.list) {
       if (!B.lay.furn.length || Math.hypot(B.x - p[0], B.z - p[2]) > (B.radius || 30) + 4) continue;
       for (const it of B.lay.furn) {
-        if (!it.act || (it.slab >= 0 && it.body === null && it.f > 0)) continue;
-        if (Math.abs(it.y - p[1] - 0.6) > 1.6) continue;
-        const d = Math.hypot(B.x + it.x - p[0], B.z + it.z - p[2]) - Math.max(it.hx, it.hz);
+        if (!it.act) continue;
+        const ix = it.body ? it.body.pos[0] : B.x + it.x, iy = it.body ? it.body.pos[1] : it.y, iz = it.body ? it.body.pos[2] : B.z + it.z;
+        if (Math.abs(iy - p[1] - 0.6) > 1.6) continue;
+        const d = Math.hypot(ix - p[0], iz - p[2]) - Math.max(it.hx, it.hz);
         if (d < bd) { bd = d; best = { act: it.act, B, it }; }
       }
     }
@@ -454,11 +477,26 @@ export class Structures {
       // do not close it on somebody standing in the doorway
       const dx = B.x + D.c0[0] - p[0], dz = B.z + D.c0[2] - p[2];
       if (Math.hypot(dx, dz) < 0.55) return 'blocked';
-      D.target = 0; D.moving = true; if (D.P.body) { this.world.remove(D.P.body); D.P.body = null; }
+      D.target = 0; D.moving = true; D.auto = false; if (D.P.body) { this.world.remove(D.P.body); D.P.body = null; }
       return 'closed';
     }
     D.target = 1; D.moving = true; if (D.P.body) { this.world.remove(D.P.body); D.P.body = null; }
     return 'opened';
+  }
+
+  // automatic doors for the walking person: a door opens when you walk up to it and shuts again after you leave
+  autoDoors(p, fx, fz) {
+    for (const B of this.list) {
+      if (!B.doors || !B.doors.length || Math.hypot(B.x - p[0], B.z - p[2]) > (B.radius || 30) + 4) continue;
+      for (const D of B.doors) {
+        const P = D.P; if (P.state !== 'fixed' || D.roller) continue;
+        if (Math.abs((P.y0 + P.y1) / 2 - (p[1] + 1.0)) > 1.6) continue;
+        const dx = B.x + D.c0[0] - p[0], dz = B.z + D.c0[2] - p[2], d = Math.hypot(dx, dz);
+        if (D.target === 0) {
+          if (d < 1.5 + P.hx && (d < 0.9 + P.hx || (dx * fx + dz * fz) / (d || 1) > 0.35)) { D.target = 1; D.moving = true; D.auto = true; if (P.body) { this.world.remove(P.body); P.body = null; } }
+        } else if (D.auto && d > 3.4 + P.hx) { D.target = 0; D.moving = true; D.auto = false; if (P.body) { this.world.remove(P.body); P.body = null; } }
+      }
+    }
   }
 
   updateDoors(dt) {
@@ -713,6 +751,13 @@ export class Structures {
         const pose = this.doorPose(D);
         m4.fromTRS(P._m || (P._m = new Float32Array(16)), [B.x + pose.pos[0], pose.pos[1], B.z + pose.pos[2]], pose.q, 1);
         r.add(P.dmesh, P._m, { cast: d - B.radius < 60 });
+      }
+      if (d - B.radius < 70) for (const it of B.lay.furn) {
+        const fb = it.body; if (!fb) continue;
+        if (!it.mesh) it.mesh = this.furnMesh(it);
+        if (!it._m) it._m = new Float32Array(16);
+        m4.fromTRS(it._m, fb.pos, fb.q, 1);
+        r.add(it.mesh, it._m, { cast: false });
       }
       for (const P of B.free) {
         const b = P.body;

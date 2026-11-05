@@ -434,6 +434,70 @@ export class World {
     if (j >= 0) this.statics.splice(j, 1);
   }
 
+  // highest surface straight below (x, y0, z): ground, fixed pieces, rubble, furniture, cars. Used by the walking person to climb over things.
+  // Only surfaces that are at or below y0 count (an origin inside a box does not hit it). skip: a body to ignore, groupMask: bodies in these groups are ignored.
+  topBelow(x, y0, z, maxT, skip, ignoreGroups) {
+    let best = this.groundOn ? 0 : -Infinity;
+    const lo = y0 - maxT;
+    for (const b of this.bodies) {
+      if (b === skip || b.removed || b.person || (ignoreGroups && (b.group & ignoreGroups))) continue;
+      const a = b.aabb;
+      if (a[0] > x || a[3] < x || a[2] > z || a[5] < z || a[1] > y0 || a[4] < lo) continue;
+      for (const s of b.shapes) {
+        const sa = s.aabb;
+        if (sa[0] > x || sa[3] < x || sa[2] > z || sa[5] < z || sa[1] > y0 || sa[4] < lo) continue;
+        const m = s.m, c = s.c, e = s.he;
+        const rx = x - c[0], ry = y0 - c[1], rz = z - c[2];
+        let tmin = -1e9, tmax = 1e9, hit = true;
+        for (let k = 0; k < 3 && hit; k++) {
+          const ay = m[k * 3 + 1], p = rx * m[k * 3] + ry * ay + rz * m[k * 3 + 2];
+          if (Math.abs(ay) < 1e-9) { if (Math.abs(p) > e[k]) hit = false; }
+          else {
+            let t1 = (-e[k] - p) / -ay, t2 = (e[k] - p) / -ay;
+            if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+            if (t1 > tmin) tmin = t1;
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) hit = false;
+          }
+        }
+        if (hit && tmin < 0 && tmax > 0) return -Infinity;                       // the probe point is inside a solid: not a place to stand
+        if (hit && tmin >= 0 && tmin <= maxT) { const y = y0 - tmin; if (y > best) best = y; }
+      }
+    }
+    return best;
+  }
+
+  // nearest hit distance of a ray against ALL fixed bodies (building panels, walls, doors ...): used for continuous collision at extreme speed
+  rayFixed(o, d, maxT) {
+    let best = Infinity;
+    const ex = o[0] + d[0] * maxT, ey = o[1] + d[1] * maxT, ez = o[2] + d[2] * maxT;
+    const mnx = Math.min(o[0], ex) - 0.05, mxx = Math.max(o[0], ex) + 0.05, mny = Math.min(o[1], ey) - 0.05, mxy = Math.max(o[1], ey) + 0.05, mnz = Math.min(o[2], ez) - 0.05, mxz = Math.max(o[2], ez) + 0.05;
+    for (const b of this.bodies) {
+      if (!b.fixed || b.removed) continue;
+      const a = b.aabb;
+      if (a[3] < mnx || a[0] > mxx || a[5] < mnz || a[2] > mxz || a[4] < mny || a[1] > mxy) continue;
+      for (const s of b.shapes) {
+        const m = s.m, c = s.c, e = s.he;
+        const rx = o[0] - c[0], ry = o[1] - c[1], rz = o[2] - c[2];
+        let tmin = -1e9, tmax = Math.min(best, maxT), hit = true;
+        for (let k = 0; k < 3 && hit; k++) {
+          const ax = m[k * 3], ay = m[k * 3 + 1], az = m[k * 3 + 2];
+          const p = rx * ax + ry * ay + rz * az, dd = d[0] * ax + d[1] * ay + d[2] * az;
+          if (Math.abs(dd) < 1e-9) { if (Math.abs(p) > e[k]) hit = false; }
+          else {
+            let t1 = (-e[k] - p) / dd, t2 = (e[k] - p) / dd;
+            if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+            if (t1 > tmin) tmin = t1;
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) hit = false;
+          }
+        }
+        if (hit && tmin >= 0 && tmin < best) best = tmin;
+      }
+    }
+    return best;
+  }
+
   // ray against ground plane and static OBBs. returns {t, n:[..]} or null
   raycastStatic(o, d, maxT) {
     let best = null;
@@ -821,7 +885,7 @@ export class World {
     for (const b of this.bodies) {
       if (b.fixed || b.sleeping) continue;
       // velocity sanity clamps (no CCD, keep things from tunnelling / blowing up)
-      const vm = b.group === GROUP.CAR ? 160 : 55, wm = b.group === GROUP.CAR ? 40 : 28;
+      const vm = b.vmax || (b.group === GROUP.CAR ? 160 : 55), wm = b.group === GROUP.CAR ? 40 : 28;
       const vl = Math.hypot(b.v[0], b.v[1], b.v[2]);
       if (vl > vm) { const k = vm / vl; b.v[0] *= k; b.v[1] *= k; b.v[2] *= k; }
       const wl = Math.hypot(b.w[0], b.w[1], b.w[2]);

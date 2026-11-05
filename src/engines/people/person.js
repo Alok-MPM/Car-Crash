@@ -5,7 +5,9 @@ import { m4, clamp } from '../../core/math.js';
 import { T } from '../buildings/render.js';
 
 const SKIN = [0.78, 0.55, 0.42], SHIRT = [0.16, 0.3, 0.55], PANTS = [0.14, 0.14, 0.17], SHOE = [0.07, 0.07, 0.08];
-const HALF_H = 0.9;
+// The collision box covers the body from the knees up (0.5 m .. 1.8 m); the legs are 'free', so anything lower than a step is walked over.
+// Feet height is held by the controller itself (ray under the feet): ground, stairs, rubble, furniture, slabs - so the person can never sink into anything.
+const LEG = 0.5, HB = 0.65, HALF_H = LEG + HB, STEP = 0.5;
 
 export class Person {
   constructor(ctx) {
@@ -28,15 +30,15 @@ export class Person {
   spawn(pos, yaw) {
     this.despawn();
     const b = new Body({ mass: 75, pos: [pos[0], pos[1] + HALF_H + 0.05, pos[2]], q: [0, 0, 0, 1], fric: 0.05, rest: 0, group: GROUP.PROP, mask: GROUP.STATIC | GROUP.CAR | GROUP.DEBRIS | GROUP.PROP, angDamp: 1, canSleep: false });
-    b.addBox([0.26, HALF_H, 0.2]);
+    b.addBox([0.26, HB, 0.2]);
     b.invIl = [0, 0, 0, 0, 0, 0, 0, 0, 0];   // never tips over
     b.person = true;
     this.ctx.world.add(b);
-    this.body = b; this.yaw = yaw; this.active = true; this.speed = 0;
+    this.body = b; this.yaw = yaw; this.active = true; this.speed = 0; this.vy = 0; this.onGround = true;
   }
   despawn() { if (this.body) { this.ctx.world.remove(this.body); this.body = null; } this.active = false; }
   get feet() { const p = this.body.pos; return [p[0], p[1] - HALF_H, p[2]]; }
-  get grounded() { const b = this.body; return (b.gcT !== undefined && this.ctx.world.time - b.gcT < 0.12) || b.pos[1] - HALF_H < 0.06 || (this.stairT !== undefined && this.ctx.world.time - this.stairT < 0.12); }
+  get grounded() { return this.onGround; }
 
   // inp: {fwd -1..1, turn -1..1, run 0/1, jump bool}
   update(dt, inp) {
@@ -46,13 +48,32 @@ export class Person {
     const tx = Math.sin(this.yaw) * v, tz = Math.cos(this.yaw) * v;
     const k = 1 - Math.exp(-dt * (this.grounded ? 12 : 2));
     b.v[0] += (tx - b.v[0]) * k; b.v[2] += (tz - b.v[2]) * k;
-    if (inp.jump && this.grounded) b.v[1] = 4.2;
-    // stairs: treads do not collide with the body, the flight height is followed instead (up and down)
-    const st = this.ctx.scene.structures;
-    if (st.stairHeight) {
-      const h = st.stairHeight(b.pos[0], b.pos[2], b.pos[1] - HALF_H);
-      if (h !== null && b.v[1] < 2.5) { const ty = h + HALF_H + 0.04; b.pos[1] += (ty - b.pos[1]) * Math.min(1, dt * (ty > b.pos[1] ? 40 : 22)); b.v[1] = 0; this.stairT = this.ctx.world.time; }
+    // ---- feet: find what is under them (5 probes), step up / fall / jump
+    const w = this.ctx.world, st = this.ctx.scene.structures;
+    let feet = b.pos[1] - HALF_H;
+    let sup = -Infinity;
+    const px = b.pos[0], pz = b.pos[2], o = 0.16;
+    const y0 = feet + STEP;
+    for (let i = 0; i < 5; i++) {
+      const sx = i === 0 ? 0 : (i & 1 ? o : -o), sz = i === 0 ? 0 : (i & 2 ? o : -o);
+      const t = w.topBelow(px + sx, y0, pz + sz, 60, b, GROUP.STAIR);
+      if (t > sup) sup = t;
     }
+    if (st.stairHeight) { const h = st.stairHeight(px, pz, feet); if (h !== null && h > sup - 0.001) sup = h; }
+    if (sup === -Infinity) sup = feet;                    // every probe is inside something (squeezed): hold the height, physics pushes the body out
+    if (this.vy > 0) {                                  // rising (jump)
+      feet += this.vy * dt; this.vy -= 9.81 * dt; this.onGround = false;
+      if (this.vy <= 0 && feet <= sup) { feet = sup; this.vy = 0; this.onGround = true; }
+    } else if (sup > feet + 0.002) {                     // step / stair / kerb: climb smoothly
+      feet += (sup - feet) * Math.min(1, dt * 28); if (sup - feet < 0.004) feet = sup; this.vy = 0; this.onGround = true;
+    } else if (sup < feet - 0.03) {                      // edge: fall
+      this.vy -= 9.81 * dt; feet += this.vy * dt; this.onGround = false;
+      if (feet <= sup) { feet = sup; this.vy = 0; this.onGround = true; }
+    } else { feet += (sup - feet) * Math.min(1, dt * 40); this.vy = 0; this.onGround = true; }
+    if (inp.jump && this.onGround) { this.vy = 4.4; this.onGround = false; }
+    b.pos[1] = feet + HALF_H; b.v[1] = 0;
+    this.stairT = this.ctx.world.time;
+    if (st.autoDoors) st.autoDoors(this.feet, Math.sin(this.yaw), Math.cos(this.yaw));
     b.wake && b.wake();
     this.speed = Math.hypot(b.v[0], b.v[2]);
     this.walkT += dt * (this.speed * 1.9);

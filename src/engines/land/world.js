@@ -175,14 +175,39 @@ export class Scene {
     const S = (this.structures = new Structures(this.ctx));
     this.bld = [];
     // engineered buildings (Building Engineer): recipes only, the engine works out structure, openings, rooms and colours
-    S.addBuilding({ recipe: 'house', x: -48, z: -70 });
-    S.addBuilding({ recipe: 'houseSmall', x: 50, z: -90 });
-    S.addBuilding({ recipe: 'shop', x: -52, z: -112 });
-    S.addBuilding({ recipe: 'market', x: 52, z: -50 });          // vegetables: walk in and buy (F at the counter)
-    S.addBuilding({ recipe: 'villa', x: -100, z: -120 });
-    S.addBuilding({ recipe: 'tower', x: 118, z: -80 });
-  S.addBuilding({ recipe: 'mandir', x: 95, z: -150 });          // indestructible temple (free-form shape engine)
-  S.addBuilding({ recipe: 'roundTower', x: -105, z: -60 });
+    // ---- test street: every building stands in its own straight road column (road width follows the building width).
+    // Front road runs 400 m, back road 200 m, so a car can get to full speed head-on from either side and hit the building squarely.
+    const ZB = -260;
+    const SIZE = { house: [11.5, 9.5], houseSmall: [8, 8.5], villa: [12, 10], shop: [12, 9], market: [12, 8], tower: [16, 13], roundTower: [8.4, 8.4], mandir: [16, 16] };
+    this.streets = [];
+    const roadB = new Builder([0, 0, 0]), lineW = new Builder([0, 0, 0]), lineY = new Builder([0, 0, 0]);
+    const slab = (bd, x0, z0, x1, z1, y0, y1) => bd.addGeo(rbox(Math.max((x1 - x0) / 2, 0.001), (y1 - y0) / 2, Math.max((z1 - z0) / 2, 0.001), 0.0005, 1), 'paint', 0, M.tr((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2));
+    const lay = (names, dir) => {
+      let edge = 34;
+      for (const nm of names) {
+        const [w, d] = SIZE[nm], wr = Math.max(w + 8, 14);
+        const cx = dir * (edge + wr / 2); edge += wr + 9;
+        S.addBuilding({ recipe: nm, x: cx, z: ZB });
+        const zf = ZB + d / 2, zb = ZB - d / 2, zEnd = zf + 400, zBack = zb - 200;
+        this.streets.push({ name: nm, x: cx, zf, zb, wr, zFar: zEnd - 10, zBackFar: zBack + 10 });
+        slab(roadB, cx - wr / 2, zBack, cx + wr / 2, zEnd, 0, 0.012);
+        slab(lineW, cx - wr / 2 + 0.35, zBack, cx - wr / 2 + 0.5, zEnd, 0.012, 0.016);       // boundary lines
+        slab(lineW, cx + wr / 2 - 0.5, zBack, cx + wr / 2 - 0.35, zEnd, 0.012, 0.016);
+        for (let z = zEnd - 6; z > zBack + 6; z -= 12) if (z > zf + 2 || z < zb - 2) slab(lineY, cx - 0.1, z - 3, cx + 0.1, z + 3, 0.012, 0.016);   // centre dashes
+        for (let z = zf + 50; z < zEnd; z += 50) slab(lineW, cx - wr / 2 + 0.5, z - 0.15, cx + wr / 2 - 0.5, z + 0.15, 0.012, 0.016);   // distance bars every 50 m
+        for (let z = zb - 50; z > zBack; z -= 50) slab(lineW, cx - wr / 2 + 0.5, z - 0.15, cx + wr / 2 - 0.5, z + 0.15, 0.012, 0.016);
+        slab(lineW, cx - wr / 2 + 0.5, zf + 1.3, cx + wr / 2 - 0.5, zf + 1.6, 0.012, 0.016);  // stop line in front of the building
+      }
+    };
+    lay(['house', 'villa', 'tower', 'roundTower'], -1);
+    lay(['houseSmall', 'shop', 'market', 'mandir'], 1);
+    {
+      const rf = roadB.finish(), wf2 = lineW.finish(), yf2 = lineY.finish();
+      rf.groups.forEach((g) => (g.mat = { kind: 0, base: [0.1, 0.1, 0.11], rough: 0.92 }));
+      wf2.groups.forEach((g) => (g.mat = { kind: 0, base: [0.82, 0.82, 0.8], rough: 0.7, poly: true }));
+      yf2.groups.forEach((g) => (g.mat = { kind: 0, base: [0.85, 0.6, 0.05], rough: 0.7, poly: true }));
+      this.streetMeshes = [rf, wf2, yf2].map((f) => r.createMesh(f.geo, { groups: f.groups, radius: 8000 }));
+    }
     // end wall of the runway (stacked concrete blocks)
     S.addBarrier({ x: 0, z: -6100, len: 60, th: 3, h: 6, rows: 2, seg: 3 });
     // ramps (fixed, raycastable)
@@ -301,6 +326,11 @@ export class Scene {
     for (let i = 0; i < 10; i++) this.prop(M_.bin, 8, [150 + i * 1.2, 0.4, -20], 0, [{ he: [0.24, 0.4, 0.24] }], { type: 'bin', radius: 0.4 });
     // wrecking ball sphere target (heavy, rolls)
     this.prop(M_.ball, 2500, [-160, 0.8, -160], 0, [{ he: [0.7, 0.7, 0.7] }, { he: [0.7, 0.7, 0.7], q: [0, 0.3827, 0, 0.9239] }], { type: 'ball', radius: 1, rest: 0.2 });
+      // keep the test streets clean: nothing from the old yard (crates, barriers, ramps, cones ...) may stand on a road column
+    const inCol = (x, z) => this.streets.some((st) => Math.abs(x - st.x) < st.wr / 2 + 3 && z > st.zBackFar - 12 && z < st.zFar + 20);
+    for (const p of this.props) if (inCol(p.body.pos[0], p.body.pos[2])) { p.dead = true; this.world.remove(p.body); }
+    this.props = this.props.filter((p) => !p.dead);
+    this.ramps = this.ramps.filter((rp) => { if (inCol(rp.body.pos[0], rp.body.pos[2])) { this.world.remove(rp.body); return false; } return true; });
   }
 
   update(dt) {
@@ -314,6 +344,7 @@ export class Scene {
     const { r } = this;
     r.add(this.ground, this._gm || (this._gm = m4.fromTRS(new Float32Array(16), [0, 0, 0], [0, 0, 0, 1], 1)), { cast: false });
     for (const m of this.marks) r.add(m, this.markModel, { cast: false });
+    if (this.streetMeshes) for (const m of this.streetMeshes) r.add(m, this.markModel, { cast: false });
     const cx = cam[0], cz = cam[2];
     for (const b of this.boards) if (Math.abs(b.model[14] - cz) < 900) r.add(b.m, b.model, { cast: false });
     this.structures.draw(cam);
