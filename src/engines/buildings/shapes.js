@@ -1,3 +1,4 @@
+import { WINDOW_TYPES } from './catalog.js';
 // Shape engine: free-form architecture from a handful of primitives. Everything becomes oriented panels (quaternion + size)
 // that the same structural / fracture runtime handles as it does straight walls, so a curved wall, a dome or a temple spire
 // breaks, falls and piles up as rubble with exactly the same rules.
@@ -144,20 +145,24 @@ export function shapeElements(shapes, add, newRun) {
       const sm = g.a + g.wid / 2, c0 = pt(sm), n = nOut(sm), X = norm(cross([0, 1, 0], n)), Y = [0, 1, 0];
       const sill = y0 + g.sill, top = y0 + Math.min(g.h, h - 0.05);
       const tint = ex.trim || '#2e3135';
+      const WT = WINDOW_TYPES[g.wtype] || WINDOW_TYPES.grid;
       const bar = (along, yc, wl, hh, dep, off, tn) => decoBox(host, [c0[0] + X[0] * along + n[0] * off, yc, c0[2] + X[2] * along + n[2] * off], X, Y, n, wl / 2, hh / 2, dep / 2, tn || tint, f);
-      const wf = 0.06, dp = Math.min(0.1, th * 0.5);
-      bar(-g.wid / 2 + wf / 2, (sill + top) / 2, wf, top - sill, dp, 0);           // left jamb
-      bar(g.wid / 2 - wf / 2, (sill + top) / 2, wf, top - sill, dp, 0);            // right jamb
+      const wf = jambOnly ? 0.06 : WT.frame, lin = Math.min(th * 0.98, 0.3);   // frame bars run the full wall depth = deep dark reveal liner
+      bar(-g.wid / 2 + wf / 2, (sill + top) / 2, wf, top - sill, lin, 0);          // left jamb
+      bar(g.wid / 2 - wf / 2, (sill + top) / 2, wf, top - sill, lin, 0);           // right jamb
       if (g.kind === 'arch' || g.kind === 'pointed' || g.kind === 'round') return;
-      bar(0, top - wf / 2, g.wid, wf, dp, 0);                                       // head
+      bar(0, top - wf / 2, g.wid, wf, lin, 0);                                      // head
       if (jambOnly) return;
-      bar(0, sill + wf / 2, g.wid, wf, dp, 0);                                      // bottom rail
-      if (g.wid > 1.25) bar(0, (sill + top) / 2, 0.04, top - sill, dp * 0.8, 0);   // mullion
-      if (top - sill > 1.5) bar(0, sill + (top - sill) * 0.72, g.wid, 0.04, dp * 0.8, 0);   // transom
-      // outer sill (projects past the wall face) and inner window board
-      const o = th / 2;
-      const sillTint = ex.sill || '#cfcac0';
-      bar(0, sill - 0.025, g.wid + 0.24, 0.05, 0.14, o + 0.03, sillTint);
+      bar(0, sill + wf / 2, g.wid, wf, lin, 0);                                     // bottom rail
+      // glazing bars (stand proud of the glass on both sides so panes read as separate lights)
+      const bw = WT.bar, inner = g.wid - 2 * wf, hgt = top - sill - 2 * wf;
+      const nc = WT.cols || Math.max(1, Math.round(inner / (WT.maxPane || 1.0)));
+      if (bw > 0) for (let i = 1; i < nc; i++) bar(-g.wid / 2 + wf + (inner * i) / nc, (sill + top) / 2, bw, hgt, Math.min(th, 0.16), 0);
+      if (WT.transom && hgt > 1.5) bar(0, sill + wf + hgt * WT.transom, inner, Math.max(bw, 0.05), Math.min(th, 0.12), 0);
+      // outer sill: a thick plaster slab projecting past the face (slab) or a thin metal/stone sill
+      const o = th / 2, sillTint = ex.sill || '#e9e6df';
+      if (WT.sill === 'slab') bar(0, sill - 0.05, g.wid + 0.36, 0.09, 0.2, o + 0.05, sillTint);
+      else bar(0, sill - 0.025, g.wid + 0.2, 0.05, 0.14, o + 0.03, sillTint);
       bar(0, sill + 0.005, g.wid + 0.1, 0.03, 0.10, -o + 0.04, sillTint);
       if (ex.chajja) bar(0, top + 0.06, g.wid + 0.5, 0.06, 0.45, o + 0.2, sillTint);
     };
@@ -184,7 +189,7 @@ export function shapeElements(shapes, add, newRun) {
     }
   };
 
-  const exOf = (S) => { const o = {}; for (const k of ['tint', 'interior', 'anchored', 'parapet', 'railing', 'src', 'slabLook', 'roof', 'stair', 'tag', 'cant', 'fin', 'ghost', 'trim', 'sill', 'chajja', 'doorTint', 'tile', 'core']) if (S[k] !== undefined) o[k] = S[k]; if (S.interior) o.out = null; return o; };
+  const exOf = (S) => { const o = {}; for (const k of ['tint', 'interior', 'anchored', 'parapet', 'railing', 'src', 'slabLook', 'roof', 'stair', 'tag', 'cant', 'fin', 'ghost', 'trim', 'sill', 'chajja', 'doorTint', 'tile', 'core', 'glassTint']) if (S[k] !== undefined) o[k] = S[k]; if (S.interior) o.out = null; return o; };
   let runId = 100000;
   for (const S of shapes) {
     const mat = S.mat || 'rcc';

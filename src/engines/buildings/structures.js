@@ -223,7 +223,7 @@ export class Structures {
       const roof = P.e.roof;
       return (fi) => (fi === 2 ? (roof ? [T.roof, 1, 1, 1] : [T.floor, 1, 1, 1]) : fi === 3 ? [pl, pIn[0], pIn[1], pIn[2]] : [T.rcc, 1, 1, 1]);
     }
-    if (P.kind === 'pane') { const fa = P.hx < P.hz ? [0, 1] : [4, 5]; return (fi) => (fa.includes(fi) ? [T.glass, 1, 1, 1] : [T.metal, 0.3, 0.3, 0.33]); }
+    if (P.kind === 'pane') { const fa = P.hx < P.hz ? [0, 1] : [4, 5]; return (fi) => (fa.includes(fi) ? [T.glass, ...(P.e.glassTint || [0.3, 0.4, 0.44])] : [T.metal, 0.3, 0.3, 0.33]); }
     if (P.kind === 'door') { const dc = P.e.doorTint ? hexRGB(P.e.doorTint).map((v) => Math.min(1, v * 1.5)) : [B.trim[0] * 2.2 + 0.25, B.trim[1] * 2.2 + 0.2, B.trim[2] * 2.2 + 0.15]; return (fi) => [T.wood, dc[0], dc[1], dc[2]]; }
     return () => [T.rcc, 1, 1, 1];
   }

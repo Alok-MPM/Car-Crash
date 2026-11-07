@@ -178,7 +178,7 @@ export class Scene {
     // ---- test street: every building stands in its own straight road column (road width follows the building width).
     // Front road runs 400 m, back road 200 m, so a car can get to full speed head-on from either side and hit the building squarely.
     const ZB = -260;
-    const SIZE = { house: [11.5, 9.5], houseSmall: [8, 8.5], villa: [12, 10], shop: [12, 9], market: [12, 8], tower: [16, 13], roundTower: [8.4, 8.4], mandir: [16, 16] };
+    const SIZE = { house: [11.5, 9.5], houseSmall: [8, 8.5], villa: [12, 10], shop: [12, 9], market: [12, 8], tower: [16, 13], podHouse: [12, 14], louvreHouse: [12, 10], woodHouse: [11, 10], roundTower: [8.4, 8.4], mandir: [16, 16] };
     this.streets = [];
     const roadB = new Builder([0, 0, 0]), lineW = new Builder([0, 0, 0]), lineY = new Builder([0, 0, 0]);
     const slab = (bd, x0, z0, x1, z1, y0, y1) => bd.addGeo(rbox(Math.max((x1 - x0) / 2, 0.001), (y1 - y0) / 2, Math.max((z1 - z0) / 2, 0.001), 0.0005, 1), 'paint', 0, M.tr((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2));
@@ -199,8 +199,8 @@ export class Scene {
         slab(lineW, cx - wr / 2 + 0.5, zf + 1.3, cx + wr / 2 - 0.5, zf + 1.6, 0.012, 0.016);  // stop line in front of the building
       }
     };
-    lay(['house', 'villa', 'tower', 'roundTower'], -1);
-    lay(['houseSmall', 'shop', 'market', 'mandir'], 1);
+    lay(['house', 'villa', 'tower', 'roundTower', 'podHouse'], -1);
+    lay(['houseSmall', 'shop', 'market', 'mandir', 'louvreHouse', 'woodHouse'], 1);
     {
       const rf = roadB.finish(), wf2 = lineW.finish(), yf2 = lineY.finish();
       rf.groups.forEach((g) => (g.mat = { kind: 0, base: [0.1, 0.1, 0.11], rough: 0.92 }));

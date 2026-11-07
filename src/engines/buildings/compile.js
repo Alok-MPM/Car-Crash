@@ -6,7 +6,8 @@
 //   - slabs under every storey with openings above the stair well, dog-leg stairs with mid-landing and a roof head-house
 //   - furniture laid out against the walls but clear of the doors, kitchens with hob / sink / fridge, bathrooms, shops
 // Coordinates: metres, x right, z towards the street (front = +z). Floor f stands on y = base[f].
-import { prof, PLANES } from './shapes.js';
+import { prof, PLANES } from './shapes.js'
+import { applyPalette, windowType } from './catalog.js';
 export const T_EXT = 0.23, T_PART = 0.115, SLAB = 0.2;
 const E = 0.04;
 const snap = (v) => Math.round(v * 20) / 20;
@@ -81,7 +82,7 @@ const segPos = (s, x, z) => (s.axis === 'x' ? x : z);
 
 // ---------- main entry ----------
 export function compileDesign(D) {
-  const style = STYLES[D.style] || STYLES.modern;
+  const style = applyPalette(STYLES[D.style] || STYLES.modern, STYLES[D.style] ? D.style : 'modern', D.seed || 7);
   const mat = D.mat || style.mat || 'block';
   const floors = D.floors;
   const shapes = [], furn = [], rooms = [], hazards = [], stairsOut = [], acts = [], issues = [];
@@ -189,7 +190,7 @@ export function compileDesign(D) {
           const aa = Math.max(0.3, u0 - s.a0), bb = Math.min(len - 0.3, u1 - s.a0);
           if (bb - aa < 0.9) continue;
           if (s.gaps.some((g) => aa < g.a + g.wid + 0.2 && bb > g.a - 0.2)) continue;
-          s.gaps.push({ wid: bb - aa, sill: 0.1, h: Math.min(h - 0.35, 2.8), kind: 'rect', a: aa, pane: true });
+          s.gaps.push({ wid: bb - aa, sill: 0.1, h: Math.min(h - 0.35, 2.8), kind: 'rect', a: aa, pane: true, wtype: 'slider' });
         }
       }
       if (room.type === 'stairs') { if (len >= 1.2 && f < floors.length - 1) { const w = Math.min(0.9, len - 0.5); s.gaps.push({ wid: w, sill: 1.0, h: 2.4, kind: 'rect', a: (len - w) / 2, pane: true }); } continue; }
@@ -204,8 +205,8 @@ export function compileDesign(D) {
         const a = (len / nWin) * (i + 0.5) - w / 2;
         if (s.gaps.some((g) => a < g.a + g.wid + 0.3 && a + w > g.a - 0.3)) continue;
         if (blocked(s, a + w / 2)) continue;
-        if (bal && i === Math.floor(nWin / 2)) { s.gaps.push({ wid: Math.min(1.9, w + 0.3), sill: 0, h: 2.3, kind: 'rect', a: Math.max(0.15, a - 0.15), pane: true, bdoor: true }); continue; }
-        s.gaps.push({ wid: w, sill: Math.min(spec[1], 1.2), h: Math.min(spec[1] + spec[2], h - 0.35), kind: D.openStyle === 'arch' && spec[1] > 0 && room.type !== 'bath' ? 'arch' : 'rect', a, pane: true });
+        if (bal && i === Math.floor(nWin / 2)) { s.gaps.push({ wid: Math.min(1.9, w + 0.3), sill: 0, h: 2.3, kind: 'rect', a: Math.max(0.15, a - 0.15), pane: true, bdoor: true, wtype: 'slider' }); continue; }
+        s.gaps.push({ wid: w, sill: Math.min(spec[1], 1.2), h: Math.min(spec[1] + spec[2], h - 0.35), kind: D.openStyle === 'arch' && spec[1] > 0 && room.type !== 'bath' ? 'arch' : 'rect', a, pane: true, wtype: windowType(D.style, room.type, w, Math.min(spec[1] + spec[2], h - 0.35) - Math.min(spec[1], 1.2), (D.seed || 7) + f * 5 + i) });
       }
     }
     for (const s of segs) s.gaps.sort((p, q) => p.a - q.a);
@@ -225,7 +226,7 @@ export function compileDesign(D) {
       const m = liftWall ? 'rcc' : s.ext ? mat : (mat === 'clay' ? 'clay' : 'block');
       const srcKey = `f${f}:${s.axis}${s.c}`;
       const tint = s.ext ? ((D.tints && D.tints[srcKey]) || (frontTint && s.axis === 'x' && s.out > 0 ? frontTint : (F.tint || undefined))) : undefined;
-      const extra = s.ext ? { tint, trim: style.trim, doorTint: style.wood, chajja: !!D.chajja || D.style === 'classic' } : { interior: true, trim: '#ece7dc', doorTint: style.wood, core: liftWall };
+      const extra = s.ext ? { tint, trim: style.trim, glassTint: style.glass, sill: style.sillC, doorTint: style.wood, chajja: !!D.chajja || D.style === 'classic' } : { interior: true, trim: '#ece7dc', doorTint: style.wood, core: liftWall };
       if (s.axis === 'x') {
         // walking +x; outward normal for a "line" = right of walking direction = (tz,-tx) -> (0,-1) i.e. -z; flip when outward is +z
         shapes.push({ t: 'line', x0: a0, z0: c, x1: a1, z1: c, y0, h, thick: th, mat: m, gaps, flip: s.ext ? s.out > 0 : false, f, ...extra, src: srcKey });

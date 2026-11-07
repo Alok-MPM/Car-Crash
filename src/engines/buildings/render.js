@@ -71,10 +71,8 @@ function drawTile(g, x, y, S, t) {
     for (let i = 0; i < 8; i++) { const v = rnd(-14, 14) | 0; g.fillStyle = `rgb(${138 + v},${98 + v},${64 + v})`; g.fillRect(x, y + (i * S) / 8 + 1, S, S / 8 - 2); }
     for (let i = 0; i < 160; i++) { g.strokeStyle = `rgba(50,30,15,${rnd(0.05, 0.25)})`; g.lineWidth = 1; const yy = y + rnd(0, S); g.beginPath(); g.moveTo(x, yy); g.bezierCurveTo(x + S * 0.3, yy + rnd(-2, 2), x + S * 0.6, yy + rnd(-2, 2), x + S, yy + rnd(-2, 2)); g.stroke(); }
   } else if (t === T.glass) {
-    const gr = g.createLinearGradient(x, y, x + S, y + S);
-    gr.addColorStop(0, '#9fc3d8'); gr.addColorStop(0.5, '#4d7893'); gr.addColorStop(1, '#27405a');
-    g.fillStyle = gr; g.fillRect(x, y, S, S);
-    g.fillStyle = 'rgba(255,255,255,.18)'; g.beginPath(); g.moveTo(x + S * 0.1, y); g.lineTo(x + S * 0.45, y); g.lineTo(x + S * 0.15, y + S); g.lineTo(x - S * 0.1, y + S); g.fill();
+    // neutral flat glass: colour comes from the building's glass tint, shine from the shader (sky reflection), so no painted streaks
+    g.fillStyle = '#ffffff'; g.fillRect(x, y, S, S);
   } else if (t === T.marble) {
     g.fillStyle = '#26272a'; g.fillRect(x, y, S, S);
     for (let k = 0; k < 7; k++) {   // white veins: wandering polylines
