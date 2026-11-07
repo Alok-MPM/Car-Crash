@@ -1,9 +1,9 @@
 // Building recipes: only a few numbers. The Building Engineer decides everything else (structure, sizes, layout, colours).
 export const RECIPES = {
   // Architect briefs: kind, size, floors and style. The Architect (engines/buildings/architect.js) designs rooms, stairs, doors, windows, furniture and facade.
-  house: { brief: { kind: 'house', w: 11.5, d: 9.5, floors: 2, garage: true, style: 'modern' } },
-  houseSmall: { brief: { kind: 'house', w: 8, d: 8.5, floors: 2, style: 'classic' } },
-  villa: { brief: { kind: 'house', w: 12, d: 10, floors: 3, style: 'dark', garage: true } },
+  house: { brief: { kind: 'house', w: 11.5, d: 9.5, floors: 2, garage: true, style: 'modern', seed: 3, facade: 'auto' } },
+  houseSmall: { brief: { kind: 'house', w: 8, d: 8.5, floors: 2, style: 'classic', seed: 4 } },
+  villa: { brief: { kind: 'house', w: 12, d: 10, floors: 3, style: 'dark', garage: true, seed: 8, facade: 'auto' } },
   shop: { brief: { kind: 'house', w: 12, d: 9, floors: 2, shopGround: true, style: 'brick' } },
   market: { brief: { kind: 'market', w: 12, d: 8 } },
   tower: { brief: { kind: 'tower', w: 16, d: 13, floors: 8, style: 'glass' } },
@@ -56,7 +56,7 @@ RECIPES.apse = {
 };
 
 // reference-photo houses (designed through the facade program: volumes, pods, louvres, tiles)
-RECIPES.podHouse = { brief: {"kind": "house", "w": 12, "d": 14, "floors": 4, "style": "dark", "seed": 11, "lift": false, "frontGlass": {"1": [[-5.5, 5.5]], "2": [[-4.6, 5.5]], "3": [[-0.5, 5.5]]}, "floorTints": {"1": "#2c2e32", "2": "#34363a", "3": "#3a3c40"}, "extraFeatures": [{"t": "volume", "f0": 0, "f1": 3, "u0": -6.0, "u1": -4.2, "d": 0.45, "tile": "marble"}, {"t": "volume", "f0": 2, "f1": 3, "u0": -1.8, "u1": -0.6, "d": 0.45, "tile": "marble"}, {"t": "pods", "f0": 1, "w": 0.5, "depth": 1.5, "tile": "slate", "tint": "#2a2c30", "items": [{"u0": -6.0, "u1": -3.7, "kind": "rbox", "hgt": 3.4, "r": 0.7}, {"u0": -3.7, "u1": -0.7, "kind": "tri", "hgt": 3.4}, {"u0": -0.7, "u1": 1.9, "kind": "rbox", "hgt": 3.4, "r": 0.7}, {"u0": 1.9, "u1": 6.0, "kind": "rbox", "hgt": 3.4, "r": 0.9}]}, {"t": "balcony", "f": 2, "x0": -3.7, "x1": 5.7, "d": 1.6, "rail": "glass", "slabTint": "#2a2c30"}, {"t": "volume", "f0": 3, "f1": 3, "dy": -0.2, "h": 0.25, "u0": -1.8, "u1": 5.7, "d": 2.0, "tint": "#2b2d31"}, {"t": "louvre", "f0": 3, "dy": 3.4, "vTop": 14.8, "u0": -4.0, "u1": -1.9, "tint": "#3a3c40"}]} };
+RECIPES.podHouse = { brief: {"kind": "house", "w": 12, "d": 14, "floors": 4, "style": "dark", "seed": 11, "lift": false, "frontGlass": {"1": [[-5.5, 5.5]], "2": [[-4.6, 5.5]], "3": [[-0.5, 5.5]]}, "floorTints": {"1": "#2c2e32", "2": "#34363a", "3": "#3a3c40"}, "extraFeatures": [{"t": "volume", "f0": 0, "f1": 3, "u0": -6.0, "u1": -4.2, "d": 0.45, "tile": "marble"}, {"t": "volume", "f0": 2, "f1": 3, "u0": -1.8, "u1": -0.6, "d": 0.45, "tile": "marble"}, {"t": "pods", "f0": 1, "w": 0.3, "depth": 1.5, "tile": "rcc", "tint": "#2a2c30", "items": [{"u0": -6.0, "u1": -3.7, "kind": "rbox", "hgt": 3.4, "r": 0.7}, {"u0": -3.7, "u1": -0.7, "kind": "tri", "hgt": 3.4}, {"u0": -0.7, "u1": 1.9, "kind": "rbox", "hgt": 3.4, "r": 0.7}, {"u0": 1.9, "u1": 6.0, "kind": "rbox", "hgt": 3.4, "r": 0.9}]}, {"t": "balcony", "f": 2, "x0": -3.7, "x1": 5.7, "d": 1.6, "rail": "glass", "slabTint": "#2a2c30"}, {"t": "volume", "f0": 3, "f1": 3, "dy": -0.2, "h": 0.25, "u0": -1.8, "u1": 5.7, "d": 2.0, "tint": "#2b2d31"}, {"t": "louvre", "f0": 3, "dy": 3.4, "vTop": 14.8, "u0": -4.0, "u1": -1.9, "tint": "#3a3c40"}]} };
 RECIPES.louvreHouse = { brief: { kind: 'house', w: 12, d: 10, floors: 2, style: 'modern', seed: 23, garage: false, extraFeatures: [
   { t: 'louvre', f0: 1, dy: 0, vTop: 7.0, u0: -6.0, u1: -1.0, tint: '#b8a98f' },
   { t: 'louvre', f0: 1, dy: 0, vTop: 7.0, u0: -1.0, u1: 6.0, tint: '#c4b69d' },

@@ -298,8 +298,28 @@ export function compileDesign(D) {
   });
 
   // ---------- facade features ----------
-  const feat = D.features || [];
+  const feat = [...(D.features || [])];
   const front = (bz1);
+  // DOOR CLEARANCE (engine rule): no facade feature may ever cover an entrance, garage or balcony door on the front.
+  // Zones are measured from the real door gaps; features are trimmed around them (or dropped when they cannot be trimmed).
+  const doorZones = [];
+  floors.forEach((F, f) => { for (const s of (F._segs || [])) if (s.ext && s.axis === 'x' && s.out > 0) for (const g of s.gaps) {
+    if (!(g.door || g.bdoor)) continue;
+    const [x0] = segPoint(s, s.a0 + g.a), [x1] = segPoint(s, s.a0 + g.a + g.wid);
+    doorZones.push({ u0: Math.min(x0, x1) - 0.4, u1: Math.max(x0, x1) + 0.4, v0: base[f] + 0.05, v1: base[f] + 2.6 });
+  } });
+  // u-intervals of [u0,u1] left after removing door zones that overlap the height band [v0,v1]
+  const carve = (u0, u1, v0, v1) => {
+    let iv = [[u0, u1]];
+    for (const z of doorZones) {
+      if (z.v1 <= v0 + 0.02 || z.v0 >= v1 - 0.02) continue;
+      const n = [];
+      for (const [a, b] of iv) { if (z.u1 <= a || z.u0 >= b) { n.push([a, b]); continue; } if (z.u0 > a) n.push([a, z.u0]); if (z.u1 < b) n.push([z.u1, b]); }
+      iv = n;
+    }
+    return iv.filter(([a, b]) => b - a > 0.3);
+  };
+  const hitsDoor = (u0, u1, v0, v1) => { const iv = carve(u0, u1, v0, v1); return !(iv.length === 1 && Math.abs(iv[0][0] - u0) < 1e-6 && Math.abs(iv[0][1] - u1) < 1e-6); };
   for (const ft of feat) {
     const tint = ft.tint;
     if (ft.t === 'balcony') {
@@ -338,6 +358,7 @@ export function compileDesign(D) {
       const zf = ft.zf ?? bz1;
       for (let x = ft.x0 + sp / 2; x < ft.x1; x += sp) shapes.push({ t: 'box', cx: x, cz: zf + dz / 2 + (ft.off || 0), y0: ya, w: th, d: dz, h: yb - ya, f: ft.f0, tint: ft.tint || style.fin, anchored: true, fin: true });
     } else if (ft.t === 'panel') {
+      if (hitsDoor(ft.x0, ft.x1, base[ft.f0] + (ft.dy || 0), ft.h ? base[ft.f0] + (ft.dy || 0) + ft.h : base[ft.f1] + H[ft.f1]) && (ft.zf ?? bz1) >= bz1 - 0.01) { const iv = carve(ft.x0, ft.x1, base[ft.f0] + (ft.dy || 0), ft.h ? base[ft.f0] + (ft.dy || 0) + ft.h : base[ft.f1] + H[ft.f1]); if (!ft._carved) for (const [a, b] of iv) feat.push({ ...ft, x0: a, x1: b, _carved: true }); continue; }
       const ya = base[ft.f0] + (ft.dy || 0), yb = ft.h ? ya + ft.h : base[ft.f1] + H[ft.f1];
       shapes.push({ t: 'box', cx: (ft.x0 + ft.x1) / 2, cz: (ft.zf ?? bz1) + (ft.depth || 0.1) / 2, y0: ya, w: ft.x1 - ft.x0, d: ft.depth || 0.1, h: yb - ya, f: ft.f0, tint: ft.tint || (ft.tile ? undefined : style.accent), tile: ft.tile, anchored: true });
     } else if (ft.t === 'frame') {
@@ -353,6 +374,15 @@ export function compileDesign(D) {
       const f0 = ft.f0 ?? ft.f ?? 1, f1 = ft.f1 ?? f0;
       const vLo = base[f0] + (ft.dy || 0), vHi = ft.vTop != null ? ft.vTop : base[f1] + H[f1] + SLAB;
       const common = { o: org, face, f: f0, tint: ft.tint, tile: ft.tile };
+      if ((face === 'front') && ['cframe', 'jali'].includes(ft.t) && hitsDoor(ft.u0, ft.u1, vLo, vHi)) { issues.push('engine: ' + ft.t + ' would block a door - removed'); continue; }
+      if (face === 'front' && ft.t === 'volume') {
+        const vH2 = ft.h != null ? vLo + ft.h : vHi;
+        if ((ft.d ?? 1.2) > 0.2) { const iv = carve(ft.u0, ft.u1, vLo, vH2); if (!(iv.length === 1 && iv[0][0] === ft.u0 && iv[0][1] === ft.u1)) {
+          for (const [a, b] of iv) feat.push({ ...ft, u0: a, u1: b, _carved: true });
+          continue;
+        } }
+      }
+      if (face === 'front' && ft.t === 'louvre') { const iv = carve(ft.u0, ft.u1, vLo, vHi); if (!(iv.length === 1 && iv[0][0] === ft.u0 && iv[0][1] === ft.u1)) { for (const [a, b] of iv) feat.push({ ...ft, u0: a, u1: b }); continue; } }
       if (ft.t === 'cframe') {
         // thick rounded frame stroked around a window group (C-frame of the modern houses)
         const path = prof.rrect(ft.u0, vLo, ft.u1, vHi, ft.r ?? 0.9, 7);
@@ -360,13 +390,14 @@ export function compileDesign(D) {
       } else if (ft.t === 'pods') {
         // projecting window pods: an outline pulled out of the wall with the window hole left open
         for (const it of ft.items || []) {
+          if (face === 'front' && hitsDoor(it.u0, it.u1, base[it.f ?? f0] + (it.dy ?? 0), base[it.f ?? f0] + (it.dy ?? 0) + (it.hgt ?? 2.6))) { issues.push('engine: pod would block a door - removed'); continue; }
           const a = base[it.f ?? f0] + (it.dy ?? 0.0), b = a + (it.hgt ?? 2.6), w = it.w ?? ft.w ?? 0.28, u0 = it.u0, u1 = it.u1, cu = (u0 + u1) / 2, cv = (a + b) / 2;
           let out, hole;
           const shrink = (pts) => pts.map(([u, v]) => [cu + (u - cu) * ((u1 - u0 - 2 * w) / (u1 - u0)), cv + (v - cv) * ((b - a - 2 * w) / (b - a))]);
           if (it.kind === 'tri') { out = [[u0, a], [u1, a], [cu, b]]; hole = [[cu - (cu - u0) * 0.5, a + w], [cu + (u1 - cu) * 0.5, a + w], [cu, b - w * 2.4]]; }
           else if (it.kind === 'arch') { out = prof.arch(u0, a, u1, b); hole = shrink(out); }
           else { out = prof.rrect(u0, a, u1, b, it.r ?? 0.5, 6); hole = shrink(out); }
-          shapes.push({ t: 'extrude', ...common, f: it.f ?? f0, tint: it.tint ?? ft.tint, outline: out, holes: [hole], depth: it.depth ?? ft.depth ?? 0.9, d0: 0, res: 0.14, cant: true });
+          shapes.push({ t: 'extrude', ...common, f: it.f ?? f0, tint: it.tint ?? ft.tint, outline: out, holes: [hole], depth: it.depth ?? ft.depth ?? 0.9, d0: 0, res: 0.07, cant: true, poured: true });
         }
       } else if (ft.t === 'jali') {
         // laser-cut tree of life: recursive branches as slim bars, visual ornament

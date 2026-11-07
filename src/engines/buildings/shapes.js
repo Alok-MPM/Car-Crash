@@ -246,7 +246,7 @@ export function shapeElements(shapes, add, newRun) {
       const mat2 = S.mat || 'rcc', run = runId++;
       const place = (cu, cv, len, hgt, X, m) => {
         if (S.deco) decoBox(null, at(cu, cv, dc), X, m, N, len / 2, hgt / 2, dep / 2, S.tint, S.f || 0);
-        else panel('wall', mat2, S.str ?? true, at(cu, cv, dc), m, N, len, hgt, dep, run, 0, len, { f: S.f || 0, rest: { solidBlock: true, anchored: S.anchored !== false, cant: S.cant, ...exOf(S) } });
+        else panel('wall', mat2, S.str ?? true, at(cu, cv, dc), m, N, len, hgt, dep, run, 0, len, { f: S.f || 0, rest: { solidBlock: true, anchored: S.anchored === true, cant: S.cant, ...exOf(S) } });
       };
       if (S.t === 'extrude') {
         for (const r of polyRects(S.outline, S.holes, S.res || 0.15)) place((r.u0 + r.u1) / 2, (r.v0 + r.v1) / 2, r.u1 - r.u0, r.v1 - r.v0, U, V);
@@ -261,7 +261,7 @@ export function shapeElements(shapes, add, newRun) {
           const lenx = L + w * 0.45;                                                                      // overlap so corners close up
           const cu = (a[0] + b[0]) / 2, cv = (a[1] + b[1]) / 2;
           if (S.deco) decoBox(null, at(cu, cv, dc), X, W, N, lenx / 2, w / 2, dep / 2, S.tint, S.f || 0);
-          else panel('wall', mat2, S.str ?? true, at(cu, cv, dc), W, N, lenx, w, dep, run, 0, lenx, { f: S.f || 0, rest: { solidBlock: true, anchored: S.anchored !== false, cant: S.cant, ...exOf(S) } });
+          else panel('wall', mat2, S.str ?? true, at(cu, cv, dc), W, N, lenx, w, dep, run, 0, lenx, { f: S.f || 0, rest: { solidBlock: true, anchored: S.anchored === true, cant: S.cant, ...exOf(S) } });
         }
       }
     } else if (S.t === 'col') {

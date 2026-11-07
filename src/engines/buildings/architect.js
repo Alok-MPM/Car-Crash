@@ -1,6 +1,7 @@
 // Architect: a short brief (kind, size, floors, style) -> a complete DESIGN (rooms on every floor, stair well, head-house, facade features).
 // The Design Lab edits the same DESIGN, so a generated house can be changed room by room afterwards.
 import { SLAB, T_EXT, STYLES } from './compile.js';
+import { composeFacade } from './facade.js';
 import { pickLift, shaftOf, LIFT_STYLES } from './lift.js';
 
 const q25 = (v) => Math.round(v * 4) / 4;
@@ -103,6 +104,7 @@ function building(b) {
   // ---- facade features (what makes it look like a designed house and not a box)
   const features = [];
   const o = { frame: true, fins: true, balcony: true, round: true, canopy: true, tank: true, ...(b.opts || {}) };
+  let facadeArch = null; if (b.facade && !tower && N >= 2) { o.frame = false; o.fins = false; }
   const zf = d / 2;                                       // outer face of the front wall
   const bx0 = -w / 2, bx1 = w / 2;
   const mk = (o) => features.push({ ...o });
@@ -130,12 +132,13 @@ function building(b) {
     // classic / brick: small balconies with solid rails
     for (const r of frontRooms) { const bw = Math.min(r.x1 - r.x0 - 0.8, 2.6), cx = (r.x0 + r.x1) / 2; mk({ t: 'balcony', f: 1, x0: cx - bw / 2, x1: cx + bw / 2, d: 1.2, rail: 'solid', zf, slabTint: S.slab }); }
   }
+  if (b.facade && !tower && N >= 2) { const F = composeFacade({ w, d, N, style, seed: b.seed || 7, name: typeof b.facade === 'string' && b.facade !== 'auto' ? b.facade : null }); facadeArch = F.arch; for (const x of F.features) mk(x); }
   if (b.extraFeatures) for (const x of b.extraFeatures) mk(x);
   if (o.tank) mk({ t: 'tank', x: q25(ix1 - 1.5), z: q25(iz0 + 1.5) });
 
   return {
     name: b.name || (tower ? 'Tower' : 'House'), style, chajja: !!(b.opts && b.opts.chajja), seed: b.seed || 7, mat: b.mat || S.mat, openStyle: b.openStyle || (style === 'classic' ? 'arch' : 'rect'),
-    glazing: tower, floors, features, parapet: true, brief: { kind, w, d, floors: N, lift: wantLift, liftStyle: liftId, garage: !!b.garage, style, shopGround: !!b.shopGround, openStyle: b.openStyle, opts: b.opts || {}, seed: b.seed || 7 },
+    glazing: tower, floors, features, parapet: true, brief: { facade: facadeArch, kind, w, d, floors: N, lift: wantLift, liftStyle: liftId, garage: !!b.garage, style, shopGround: !!b.shopGround, openStyle: b.openStyle, opts: b.opts || {}, seed: b.seed || 7 },
   };
 }
 
