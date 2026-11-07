@@ -4,6 +4,7 @@ import { rbox, cylinder, lathe, box, plane, torus, extrude, merge, trs, makeGeo,
 import { m4, mulberry32, clamp } from '../../core/math.js';
 import { Builder, M } from '../cars/carmodel.js';
 import { Structures } from '../buildings/structures.js';
+import { planCity, buildLand, CityStreamer } from './city.js';
 
 const lin = (c) => c.map((v) => Math.pow(v, 2.2));
 
@@ -208,6 +209,10 @@ export class Scene {
       yf2.groups.forEach((g) => (g.mat = { kind: 0, base: [0.85, 0.6, 0.05], rough: 0.7, poly: true }));
       this.streetMeshes = [rf, wf2, yf2].map((f) => r.createMesh(f.geo, { groups: f.groups, radius: 8000 }));
     }
+    // ---- the city + land (seeded, streamed): roads of every type, lots with parking, trees, farmland
+    this.cityPlan = planCity({ seed: 7, cx: 1500, cz: -1200 });
+    this.land = buildLand(r, this.cityPlan);
+    this.city = new CityStreamer(this.cityPlan, S);
     // end wall of the runway (stacked concrete blocks)
     S.addBarrier({ x: 0, z: -6100, len: 60, th: 3, h: 6, rows: 2, seg: 3 });
     // ramps (fixed, raycastable)
@@ -345,6 +350,10 @@ export class Scene {
     r.add(this.ground, this._gm || (this._gm = m4.fromTRS(new Float32Array(16), [0, 0, 0], [0, 0, 0, 1], 1)), { cast: false });
     for (const m of this.marks) r.add(m, this.markModel, { cast: false });
     if (this.streetMeshes) for (const m of this.streetMeshes) r.add(m, this.markModel, { cast: false });
+    if (this.land) {
+      for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
+      for (const t of this.land.treeMeshes) { if (Math.abs(t.cx - cam[0]) < 520 && Math.abs(t.cz - cam[2]) < 520) r.add(t.m, this.markModel, { cast: false }); }
+    }
     const cx = cam[0], cz = cam[2];
     for (const b of this.boards) if (Math.abs(b.model[14] - cz) < 900) r.add(b.m, b.model, { cast: false });
     this.structures.draw(cam);

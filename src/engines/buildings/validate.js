@@ -49,6 +49,11 @@ export function validateBuilding(S, B) {
         if (Math.abs(p.cx - q.cx) < p.ax + q.ax && Math.abs(p.cz - q.cz) < p.az + q.az) { best = q; bd = dy; }
       }
       if (best) { p.below.push(best); best.above.push(p); note('load', `${p.kind} #${p.e.id} floated ${Math.max(0, bd).toFixed(2)} m above support - linked`, true); }
+      else if (best === null && (() => {   // hanging concrete (pods, frames): rests against the nearest standing panel it touches
+        const tol = 0.15; let bq = null, bdist = 1e9;
+        for (const q of P) { if (q === p || q.state !== 'fixed' || !stable.has(q)) continue;
+          if (Math.abs(p.cx - q.cx) < p.ax + q.ax + tol && Math.abs(p.cy - q.cy) < p.ay + q.ay + tol && Math.abs(p.cz - q.cz) < p.az + q.az + tol) { const d = Math.hypot(p.cx - q.cx, p.cy - q.cy, p.cz - q.cz); if (d < bdist) { bdist = d; bq = q; } } }
+        if (bq) { p.below.push(bq); bq.above.push(p); return true; } return false; })()) { note('load', `${p.kind} #${p.e.id} hangs from the wall behind it`, true); }
       else if (pass === 3) { p.anchored = true; note('load', `${p.kind} #${p.e.id} had no support path - pinned to its neighbour`, true); }
     }
   }

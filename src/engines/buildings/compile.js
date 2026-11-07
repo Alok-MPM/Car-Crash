@@ -392,12 +392,12 @@ export function compileDesign(D) {
         for (const it of ft.items || []) {
           if (face === 'front' && hitsDoor(it.u0, it.u1, base[it.f ?? f0] + (it.dy ?? 0), base[it.f ?? f0] + (it.dy ?? 0) + (it.hgt ?? 2.6))) { issues.push('engine: pod would block a door - removed'); continue; }
           const a = base[it.f ?? f0] + (it.dy ?? 0.0), b = a + (it.hgt ?? 2.6), w = it.w ?? ft.w ?? 0.28, u0 = it.u0, u1 = it.u1, cu = (u0 + u1) / 2, cv = (a + b) / 2;
-          let out, hole;
-          const shrink = (pts) => pts.map(([u, v]) => [cu + (u - cu) * ((u1 - u0 - 2 * w) / (u1 - u0)), cv + (v - cv) * ((b - a - 2 * w) / (b - a))]);
-          if (it.kind === 'tri') { out = [[u0, a], [u1, a], [cu, b]]; hole = [[cu - (cu - u0) * 0.5, a + w], [cu + (u1 - cu) * 0.5, a + w], [cu, b - w * 2.4]]; }
-          else if (it.kind === 'arch') { out = prof.arch(u0, a, u1, b); hole = shrink(out); }
-          else { out = prof.rrect(u0, a, u1, b, it.r ?? 0.5, 6); hole = shrink(out); }
-          shapes.push({ t: 'extrude', ...common, f: it.f ?? f0, tint: it.tint ?? ft.tint, outline: out, holes: [hole], depth: it.depth ?? ft.depth ?? 0.9, d0: 0, res: 0.07, cant: true, poured: true });
+          // poured concrete ring: a closed path (inset by half the stroke) swept by angled slab segments = smooth curves and slanted edges
+          let path;
+          if (it.kind === 'tri') path = [[u0 + w * 0.6, a + w / 2], [u1 - w * 0.6, a + w / 2], [cu, b - w * 0.9]];
+          else if (it.kind === 'arch') path = prof.arch(u0 + w / 2, a + w / 2, u1 - w / 2, b - w / 2, 14);
+          else path = prof.rrect(u0 + w / 2, a + w / 2, u1 - w / 2, b - w / 2, it.r ?? 0.5, 12);
+          shapes.push({ t: 'sweep', ...common, f: it.f ?? f0, tint: it.tint ?? ft.tint, path, closed: true, w, depth: it.depth ?? ft.depth ?? 0.9, d0: 0, cant: true, poured: true });
         }
       } else if (ft.t === 'jali') {
         // laser-cut tree of life: recursive branches as slim bars, visual ornament

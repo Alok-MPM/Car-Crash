@@ -446,6 +446,16 @@ function repair() {
   cars.unshift(c); player = c;
   toast('Repaired', 'Fresh from the shop');
 }
+function gotoCity() {
+  if (!player || !scene.cityPlan) return;
+  const P = scene.cityPlan; if (person.active) backToCar();
+  // start on the main east-west road of the city, driving east
+  const bz = P.roads.find((q) => q.type === 'bazaar' && q.axis === 'x'); const z0 = bz ? bz.c + 2.5 : P.cz;
+  player.vehicle.reset([P.cx - P.ext + 24, 0, z0], -Math.PI / 2);
+  scene.city.prime([{ x: P.cx - P.ext + 24, z: z0 }, { x: P.cx, z: z0 }], 12);
+  camYaw = -Math.PI / 2;
+  toast('City: roads, lots, parking, farms around. Buildings stream in as you drive', 'City');
+}
 let streetIx = 0;
 function gotoStreet() {
   if (!player || !scene.streets || !scene.streets.length) return;
@@ -686,7 +696,7 @@ const tap = (id, fn) => { const el = $(id); el.addEventListener('pointerdown', (
   const labels = { auto: 'TC: Auto', on: 'TC: On', off: 'TC: Off' };
   tap('spdTc', () => { tcMode = tcMode === 'auto' ? 'on' : tcMode === 'on' ? 'off' : 'auto'; $('spdTc').textContent = labels[tcMode]; if (player) player.vehicle.tcMode = tcMode; toast(tcMode === 'off' ? 'Traction control OFF - all the power goes to the tyres' : tcMode === 'on' ? 'Traction control ON' : 'Traction control: auto', ''); });
 }
-tap('bWalk', toggleWalk); tap('bCar', backToCar); tap('bMenu', toggleMenu); tap('bCam', cycleCam); tap('bRep', repair); tap('bSpawn', spawnAhead); tap('bStreet', gotoStreet); tap('bTod', nextTod); tap('bSlow', toggleSlow); tap('bSnd', toggleSound);
+tap('bWalk', toggleWalk); tap('bCar', backToCar); tap('bMenu', toggleMenu); tap('bCam', cycleCam); tap('bRep', repair); tap('bSpawn', spawnAhead); tap('bStreet', gotoStreet); tap('bCity', gotoCity); tap('bTod', nextTod); tap('bSlow', toggleSlow); tap('bSnd', toggleSound);
 
 // ---------- frame loop ----------
 const H = 1 / 120;
@@ -716,6 +726,7 @@ function watchBuildings() {
   for (const c of cars) { const b = c.vehicle ? c.vehicle.body : null; if (!b) continue; const sp = Math.hypot(b.v[0], b.v[2]); if (c !== player && sp < 1 && !c.vehicle.hyperOn) { pts.push({ x: b.pos[0], z: b.pos[2], r: 6 }); continue; } pts.push({ x: b.pos[0], z: b.pos[2], r: 14 + sp * 1.4 }); }
   if (person.active) pts.push({ x: person.body.pos[0], z: person.body.pos[2], r: 10 });
   scene.structures.updateDormancy(pts);
+  if (scene.city) { const q = pts.slice(); if (player && player.vehicle) q.push({ x: player.vehicle.body.pos[0], z: player.vehicle.body.pos[2] }); scene.city.update(1 / 60, q); }
 }
 function stepPhysics(real) {
   const ts = paused ? 0 : userSlow ? 0.25 : slowT > 0 ? 0.3 : 1;
