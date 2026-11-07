@@ -160,6 +160,13 @@ void main(){
   } else if (uKind == 6) {
     // textured standard
     albedo = tx.rgb * uBase * vCol;
+    // atlas cells with real surface physics: glass (2,1), brushed metal (1,2), marble (0,3), brass (3,3), fluted panel (2,3)
+    vec2 cell = floor(vUv * 4.);
+    if (cell.x == 2. && cell.y == 1.) { metal = 0.55; rough = 0.05; albedo *= 0.8; }
+    else if (cell.x == 1. && cell.y == 2.) { metal = 0.85; rough = 0.3; }
+    else if (cell.x == 3. && cell.y == 3.) { metal = 0.9; rough = 0.25; }
+    else if (cell.x == 0. && cell.y == 3.) { metal = 0.0; rough = 0.16; coat = 0.0; }
+    else if (cell.x == 2. && cell.y == 3.) { rough = 0.45; }
   }
 
   float NdV = max(dot(N, Vv), 1e-3);

@@ -4,8 +4,8 @@
 import { makeGeo } from '../../core/geo.js';
 
 export const TILE = 1.2; // metres covered by one atlas tile
-export const T = { plaster: 0, clay: 1, block: 2, rcc: 3, crack: 4, wood: 5, glass: 6, floor: 7, roof: 8, metal: 9, fabric: 10, white: 11 };
-const COLS = 4, ROWS = 3, PAD = 0.012;
+export const T = { plaster: 0, clay: 1, block: 2, rcc: 3, crack: 4, wood: 5, glass: 6, floor: 7, roof: 8, metal: 9, fabric: 10, white: 11, marble: 12, slate: 13, fluted: 14, brass: 15 };
+const COLS = 4, ROWS = 4, PAD = 0.012;
 
 function rnd(a, b) { return a + Math.random() * (b - a); }
 function speckle(g, x, y, S, n, a, dark = 80) {
@@ -75,6 +75,27 @@ function drawTile(g, x, y, S, t) {
     gr.addColorStop(0, '#9fc3d8'); gr.addColorStop(0.5, '#4d7893'); gr.addColorStop(1, '#27405a');
     g.fillStyle = gr; g.fillRect(x, y, S, S);
     g.fillStyle = 'rgba(255,255,255,.18)'; g.beginPath(); g.moveTo(x + S * 0.1, y); g.lineTo(x + S * 0.45, y); g.lineTo(x + S * 0.15, y + S); g.lineTo(x - S * 0.1, y + S); g.fill();
+  } else if (t === T.marble) {
+    g.fillStyle = '#26272a'; g.fillRect(x, y, S, S);
+    for (let k = 0; k < 7; k++) {   // white veins: wandering polylines
+      g.strokeStyle = `rgba(235,235,238,${rnd(0.35, 0.85)})`; g.lineWidth = rnd(0.6, 2.2); g.beginPath();
+      let px = x + rnd(0, S), py = y + rnd(0, S); g.moveTo(px, py);
+      for (let m = 0; m < 9; m++) { px += rnd(-30, 38); py += rnd(-14, 34); g.lineTo(px, py); if (Math.random() < 0.25) { g.moveTo(px, py); g.lineTo(px + rnd(-25, 25), py + rnd(-25, 25)); g.moveTo(px, py); } }
+      g.stroke();
+    }
+    speckle(g, x, y, S, 400, 0.12, 200);
+  } else if (t === T.slate) {
+    g.fillStyle = '#4a4c50'; g.fillRect(x, y, S, S);
+    const rows = 6;   // stacked stone ledgers
+    for (let r = 0; r < rows; r++) { let cx = x - rnd(0, 40); while (cx < x + S) { const w = rnd(40, 110), v = rnd(-16, 16) | 0; g.fillStyle = `rgb(${72 + v},${74 + v},${78 + v})`; g.fillRect(cx + 1, y + (r * S) / rows + 1, w - 2, S / rows - 2); cx += w; } }
+    speckle(g, x, y, S, 700, 0.25, 140);
+  } else if (t === T.fluted) {
+    g.fillStyle = '#2b2d31'; g.fillRect(x, y, S, S);
+    for (let i = 0; i < 16; i++) { const gr = g.createLinearGradient(x + (i * S) / 16, 0, x + ((i + 1) * S) / 16, 0); gr.addColorStop(0, 'rgba(255,255,255,.00)'); gr.addColorStop(0.35, 'rgba(255,255,255,.16)'); gr.addColorStop(1, 'rgba(0,0,0,.35)'); g.fillStyle = gr; g.fillRect(x + (i * S) / 16, y, S / 16, S); }
+  } else if (t === T.brass) {
+    const gr = g.createLinearGradient(x, y, x, y + S); gr.addColorStop(0, '#c99c83'); gr.addColorStop(0.5, '#a97c63'); gr.addColorStop(1, '#8a5f4a');
+    g.fillStyle = gr; g.fillRect(x, y, S, S);
+    for (let i = 0; i < 60; i++) { g.fillStyle = i % 2 ? 'rgba(255,235,220,.10)' : 'rgba(40,20,10,.10)'; g.fillRect(x, y + (i * S) / 60, S, S / 120); }
   } else if (t === T.floor) {
     g.fillStyle = '#d9d6cf'; g.fillRect(x, y, S, S);
     for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) { const v = rnd(-6, 6) | 0; g.fillStyle = `rgb(${226 + v},${222 + v},${214 + v})`; g.fillRect(x + (i * S) / 2 + 2, y + (j * S) / 2 + 2, S / 2 - 4, S / 2 - 4); }

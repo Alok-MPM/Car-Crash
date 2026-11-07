@@ -13,6 +13,7 @@ import { validateBuilding } from './validate.js';
 import { PAINTS } from '../../data/materials.js';
 import { GeoBuf, makeAtlas, T, hexRGB } from './render.js';
 import { RECIPES } from '../../data/recipes.js';
+import { LIFT_STYLES, buildCabinMesh, buildLeafMesh } from './lift.js';
 
 const PLASTER_T = 0.012;
 
@@ -188,6 +189,7 @@ export class Structures {
       b.addBox([it.hx, it.hy, it.hz]); this.world.add(b); b.sleep(); b.furn = it; it.body = b;
     }
     this.setupDoors(B);
+    this.setupLifts(B);
     this.list.push(B);
     validateBuilding(this, B);
     this.rebuild(B);
@@ -201,6 +203,7 @@ export class Structures {
     const pl = cracked ? T.crack : T.plaster;
     const pOut = P.e.tint ? hexRGB(P.e.tint) : B.paintOut, pIn = B.paintIn;
     if (P.e.slabLook) { const roofL = P.e.roof; return (fi) => (fi === 2 ? (roofL ? [T.roof, 1, 1, 1] : [T.floor, pOut[0] * 0.6 + 0.4, pOut[1] * 0.6 + 0.4, pOut[2] * 0.6 + 0.4]) : fi === 3 ? [pl, pIn[0], pIn[1], pIn[2]] : [pl, pOut[0], pOut[1], pOut[2]]); }
+    if (P.e.tile && T[P.e.tile] !== undefined) { const tl = T[P.e.tile], w = P.e.tint ? pOut : [1, 1, 1]; return () => [tl, w[0], w[1], w[2]]; }   // cladding: marble, slate, fluted, brass ...
     if (P.e.stair) { const w = pOut; return (fi) => [fi === 2 ? T.wood : T.rcc, w[0], w[1], w[2]]; }
     if (P.kind === 'wall' || P.kind === 'lintel') {
       const nAxisX = !P.q && P.hx < P.hz; // wall normal along x -> faces 0,1
@@ -405,6 +408,7 @@ export class Structures {
   removeBuilding(B) {
     for (const P of B.panels) { if (P.body) this.world.remove(P.body); P.state = 'gone'; }
     for (const it of B.lay.furn) if (it.body) { this.world.remove(it.body); it.body = null; }
+    for (const L of B.lifts || []) { for (const b of L.doorBodies) if (b) this.world.remove(b); if (L.floorBody) this.world.remove(L.floorBody); if (L.backBody) this.world.remove(L.backBody); }
     B.free.clear();
     if (B.mesh) this.r.deleteMesh(B.mesh);
     if (B.intMesh) this.r.deleteMesh(B.intMesh);
@@ -453,6 +457,115 @@ export class Structures {
       }
     }
     return best;
+  }
+
+
+  // ---------- lifts: shaft door at every floor, cabin that really travels, floor card ----------
+  setupLifts(B) {
+    B.lifts = [];
+    const defs = (B.compiled && B.compiled.lifts) || [];
+    for (const d of defs) {
+      const st = LIFT_STYLES[d.style] || LIFT_STYLES.passenger;
+      const cx = (d.x0 + d.x1) / 2, doorZ = d.z1, zc = d.z1 - 0.1 - st.d / 2;
+      const L = { B, d, style: d.style, st, cx, doorZ, zc, levels: d.levels.slice(), floors: d.floors.slice(), cur: 0, dest: 0, y: d.levels[0], state: 'idle', door: 0, doorT: 0, doorBodies: [], floorBody: null, carry: false, off: 0, idleT: 0, rx: 0, rz: 0 };
+      const cb = zc - st.d / 2 + 0.02, top = L.levels[L.levels.length - 1] + 3.2, bot = L.levels[0] - 0.4;
+      L.backBody = this.liftBox(L, cx, (top + bot) / 2, (d.z0 + cb) / 2, (d.x1 - d.x0) / 2, (top - bot) / 2, (cb - d.z0) / 2);   // the shaft behind the cabin is solid for the walker
+      this.syncLiftBodies(L);
+      B.lifts.push(L);
+    }
+  }
+  liftBox(L, x, y, z, hx, hy, hz) {
+    const B = L.B, b = new Body({ fixed: true, pos: [B.x + x, y, B.z + z], q: [0, 0, 0, 1], group: GROUP.STATIC, fric: 0.6, rest: 0.05 });
+    b.addBox([hx, hy, hz]); this.world.add(b); return b;
+  }
+  // landing doors block the shaft whenever the cabin is not standing there with open doors; the cabin floor is a platform under the cabin
+  syncLiftBodies(L) {
+    const open = L.state !== 'moving' && L.door > 0.5;
+    L.levels.forEach((lv, k) => {
+      const want = !(k === L.cur && open);
+      if (want && !L.doorBodies[k]) L.doorBodies[k] = this.liftBox(L, L.cx, lv + 1.05, L.doorZ, L.st.dw / 2 + 0.05, 1.05, 0.07);
+      else if (!want && L.doorBodies[k]) { this.world.remove(L.doorBodies[k]); L.doorBodies[k] = null; }
+    });
+    const d = L.d;
+    if (L.floorBody && L.floorBodyY === L.levels[L.cur]) return;
+    if (L.floorBody) this.world.remove(L.floorBody);
+    L.floorBodyY = L.levels[L.cur];
+    L.floorBody = this.liftBox(L, L.cx, L.floorBodyY - 0.06, (d.z0 + d.z1) / 2, (d.x1 - d.x0) / 2 - 0.05, 0.06, (d.z1 - d.z0) / 2 - 0.05);
+  }
+  liftInside(L, f) {
+    const B = L.B, st = L.st;
+    return Math.abs(B.x + L.cx - f[0]) < st.w / 2 - 0.02 && Math.abs(B.z + L.zc - f[2]) < st.d / 2 - 0.02 && Math.abs(f[1] - L.y) < 1.1;
+  }
+  liftGo(L, idx) {
+    if (!L || L.state === 'moving' || L.state === 'closing') return false;
+    if (idx === L.cur) { L.state = 'opening'; return true; }
+    L.dest = idx; L.state = 'closing'; return true;
+  }
+  // what the HUD should show: the lift the walking person stands in
+  liftUI(person) {
+    if (!person || !person.active || !person.body) return null;
+    const f = person.feet;
+    for (const B of this.list) {
+      if (!B.lifts || !B.lifts.length || Math.hypot(B.x - f[0], B.z - f[2]) > (B.radius || 30) + 4) continue;
+      for (const L of B.lifts) if (this.liftInside(L, f)) return { L, labels: L.floors.map((fl) => (fl === 0 ? 'G' : String(fl))), cur: L.cur, dest: L.dest, moving: L.state === 'moving' || L.state === 'closing', key: B.x + ':' + B.z + ':' + L.style };
+    }
+    return null;
+  }
+  updateLifts(dt) {
+    const person = this.ctx.person, f = person && person.active && person.body ? person.feet : null;
+    this.riding = false;
+    for (const B of this.list) {
+      if (!B.lifts) continue;
+      for (const L of B.lifts) {
+        const near = f && Math.hypot(B.x - f[0], B.z - f[2]) < (B.radius || 30) + 6;
+        const inside = !!(f && this.liftInside(L, f));
+        const spd = 1.1;
+        if (L.state === 'closing') { L.door = Math.max(0, L.door - spd * dt); if (L.door <= 0) { L.state = 'moving'; L.carry = inside; if (inside) { L.rx = person.body.pos[0]; L.rz = person.body.pos[2]; L.off = person.body.pos[1] - L.y; } this.syncLiftBodies(L); } }
+        else if (L.state === 'moving') {
+          const target = L.levels[L.dest], dist = Math.abs(target - L.y), n = Math.abs(L.dest - L.cur) || 1;
+          const v = Math.min(7, 1.6 + 0.9 * n) * Math.max(0.25, Math.min(1, dist / 1.2, (Math.abs(L.y - L.levels[L.cur]) + 0.35) / 1.2));
+          const step = Math.min(dist, Math.max(0.3, v) * dt);
+          L.y += Math.sign(target - L.y) * step;
+          if (L.carry && person && person.body) { person.body.pos[0] = L.rx; person.body.pos[2] = L.rz; person.body.pos[1] = L.y + L.off; person.body.v[0] = person.body.v[1] = person.body.v[2] = 0; this.riding = true; }
+          if (Math.abs(target - L.y) < 1e-3) { L.y = target; L.cur = L.dest; L.state = 'opening'; L.carry = false; this.syncLiftBodies(L); }
+        } else if (L.state === 'opening') { L.door = Math.min(1, L.door + spd * dt); if (L.door >= 1) { L.state = 'idle'; L.idleT = 0; } this.syncLiftBodies(L); }
+        else {   // idle: doors follow the person
+          const dx = f ? Math.hypot(B.x + L.cx - f[0], B.z + L.doorZ + 1.2 - f[2]) : 99;
+          const here = f && Math.abs(f[1] - L.levels[L.cur]) < 1.2;
+          if (near && f) {
+            if (here && (dx < 2.6 || inside)) { if (L.door < 1) { L.door = Math.min(1, L.door + spd * dt); this.syncLiftBodies(L); } L.idleT = 0; }
+            else if (!here) {   // somebody waits at another floor: call the lift
+              const k = L.levels.findIndex((lv) => Math.abs(f[1] - lv) < 1.0);
+              if (k >= 0 && k !== L.cur && dx < 3.2 && !this.liftOccupied(L) && Math.abs(B.z + L.doorZ + 1.0 - f[2]) < 3.0) this.liftGo(L, k);
+            }
+          }
+          if (L.door > 0 && !inside && !(here && dx < 3.4)) { L.idleT += dt; if (L.idleT > 1.5) { L.door = Math.max(0, L.door - spd * dt); this.syncLiftBodies(L); } }
+        }
+      }
+    }
+  }
+  liftOccupied(L) { const p = this.ctx.person; return !!(p && p.active && p.body && this.liftInside(L, p.feet)); }
+  liftMeshes(style) {
+    this._lm = this._lm || {};
+    if (!this._lm[style]) this._lm[style] = { cabin: buildCabinMesh(this.r, this.material(), style), leaf: buildLeafMesh(this.r, this.material(), style) };
+    return this._lm[style];
+  }
+  drawLifts(B, cam, d) {
+    const r = this.r;
+    this._lM = this._lM || [new Float32Array(16), new Float32Array(16), new Float32Array(16)];
+    for (const L of B.lifts) {
+      const M = this.liftMeshes(L.style), st = L.st, wx = B.x + L.cx, wz = B.z + L.zc;
+      m4.fromTRS(this._lM[0], [wx, L.y, wz], [0, 0, 0, 1], 1);
+      r.add(M.cabin, this._lM[0], { cast: false });
+      if (d - B.radius < 25) r.addLight(wx, L.y + st.h - 0.15, wz, 7, st.light[0] * 1.2, st.light[1] * 1.2, st.light[2] * 1.2);
+      const open = L.state === 'moving' ? 0 : L.door, dw = st.dw;
+      const place = (y, z, o) => {
+        const xs = st.door === 'centre' ? [wx - dw / 4 - o * dw / 2, wx + dw / 4 + o * dw / 2] : [wx - dw / 4 + o * dw * 0.9, wx + dw / 4 + o * dw * 0.45];
+        for (let i = 0; i < 2; i++) { m4.fromTRS(this._lM[1], [xs[i], y, z], [0, 0, 0, 1], 1); r.add(M.leaf, this._lM[1], { cast: false }); }
+      };
+      place(L.y, wz + st.d / 2 - 0.05, open);                                         // cabin doors
+      L.levels.forEach((lv, k) => { if (Math.abs(lv - cam[1]) > 40) return; place(lv, B.z + L.doorZ - 0.1, k === L.cur && L.state !== 'moving' ? L.door : 0); });   // landing doors
+    }
   }
 
   // ---------- doors: hinged leaves that swing open and shut, roller shutters that roll up ----------
@@ -735,6 +848,7 @@ export class Structures {
 
   update(dt) {
     this.updateDoors(dt);
+    this.updateLifts(dt);
     if (this.shatterQ.length) this.processShatter();
     this.soundT -= dt;
     const t = this.ctx.time, fx = this.ctx.fx;
@@ -779,6 +893,7 @@ export class Structures {
         if (B.intDirty || !B.intMesh) this.rebuildInterior(B);
         if (B.intMesh) r.add(B.intMesh, B.model, { cast: false });
       }
+      if (B.lifts && B.lifts.length && d - B.radius < 90) this.drawLifts(B, cam, d);
       if (d - B.radius > 260) continue;
       if (B.doors) for (const D of B.doors) {
         const P = D.P; if (P.state !== 'fixed') continue;

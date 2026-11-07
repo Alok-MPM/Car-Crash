@@ -6,6 +6,7 @@
 //   - slabs under every storey with openings above the stair well, dog-leg stairs with mid-landing and a roof head-house
 //   - furniture laid out against the walls but clear of the doors, kitchens with hob / sink / fridge, bathrooms, shops
 // Coordinates: metres, x right, z towards the street (front = +z). Floor f stands on y = base[f].
+import { prof, PLANES } from './shapes.js';
 export const T_EXT = 0.23, T_PART = 0.115, SLAB = 0.2;
 const E = 0.04;
 const snap = (v) => Math.round(v * 20) / 20;
@@ -120,19 +121,25 @@ export function compileDesign(D) {
     const blocked = (s, a) => manual.some((o) => o.kind === 'block' && segDist(s, o.x, o.z) < 0.4 && Math.abs(segPos(s, o.x, o.z) - s.a0 - a) < 0.9);
 
     // connectivity of rooms through partition doors
-    const doorSegs = [];
+    const doorSegs = [], liftSegs = [];
     for (const s of segs) {
       takeManual(s);
       if (s.ext) continue;
       const ta = s.A.type, tb = s.B.type;
       if ((ta === 'stairs' && tb === 'hall') || (ta === 'hall' && tb === 'stairs') || (ta === 'stairs' && tb === 'stairs')) { s.open = true; continue; }
       if (ta === 'stairs' || tb === 'stairs') continue;
+      if (ta === 'lift' || tb === 'lift') { const o = ta === 'lift' ? tb : ta; if (o === 'hall' || o === 'corridor' || o === 'lounge') liftSegs.push(s); continue; }
       doorSegs.push(s);
     }
     const parent = new Map(Rs.map((r) => [r, r]));
     const find = (r) => { while (parent.get(r) !== r) { parent.set(r, parent.get(parent.get(r))); r = parent.get(r); } return r; };
     const join = (a, b) => parent.set(find(a), find(b));
     for (const s of segs) if (s.open) join(s.A, s.B);
+    for (const s of liftSegs) {   // landing door of the lift shaft, centred on the shaft
+      const L = (s.A.type === 'lift' ? s.A : s.B), dw = (L.lift && L.lift.dw) || 0.9, len = s.a1 - s.a0;
+      if (len >= dw + 0.3) s.gaps.push({ wid: dw, sill: 0, h: 2.1, kind: 'rect', a: (len - dw) / 2, liftDoor: true });
+      join(s.A, s.B);
+    }
     const prio = (s) => {
       const pair = [s.A.type, s.B.type].sort().join('|');
       const hallish = ['hall', 'corridor', 'lounge'];
@@ -176,6 +183,15 @@ export function compileDesign(D) {
         if (isFront && len >= 2.4) { const w = Math.min(3.0, len - 0.6); s.gaps.push({ wid: w, sill: 0, h: 2.3, kind: 'rect', a: (len - w) / 2, door: true, garage: true }); }
         continue;
       }
+      if (room.type === 'lift') continue;
+      if (F.frontGlass && isFront) {   // full-width glazing bays (sliding glass behind deep pods / balconies)
+        for (const [u0, u1] of F.frontGlass) {
+          const aa = Math.max(0.3, u0 - s.a0), bb = Math.min(len - 0.3, u1 - s.a0);
+          if (bb - aa < 0.9) continue;
+          if (s.gaps.some((g) => aa < g.a + g.wid + 0.2 && bb > g.a - 0.2)) continue;
+          s.gaps.push({ wid: bb - aa, sill: 0.1, h: Math.min(h - 0.35, 2.8), kind: 'rect', a: aa, pane: true });
+        }
+      }
       if (room.type === 'stairs') { if (len >= 1.2 && f < floors.length - 1) { const w = Math.min(0.9, len - 0.5); s.gaps.push({ wid: w, sill: 1.0, h: 2.4, kind: 'rect', a: (len - w) / 2, pane: true }); } continue; }
       const spec = WIN[room.type] || WIN.hall;
       let ww = spec[0];
@@ -197,7 +213,8 @@ export function compileDesign(D) {
     // ---- wall shapes
     const frontTint = style.frontTint;
     for (const s of segs) {
-      let a0 = s.a0, a1 = s.a1, c = s.c, th = s.ext ? T_EXT : T_PART;
+      const liftWall = !!((s.A && s.A.type === 'lift') || (s.B && s.B.type === 'lift'));
+      let a0 = s.a0, a1 = s.a1, c = s.c, th = s.ext ? T_EXT : (liftWall ? 0.2 : T_PART);
       if (s.ext) {
         c += (s.axis === 'x' ? s.out : s.out) * T_EXT / 2;
         if (s.axis === 'x') { a0 -= T_EXT; a1 += T_EXT; }
@@ -205,10 +222,10 @@ export function compileDesign(D) {
       const shift = s.a0 - a0;   // gaps were measured from s.a0
       if (s.open) continue;
       const gaps = s.gaps.map((g) => ({ ...g, a: g.a + shift, hinge: g.door ? (g.hinge || (((Math.round(s.c * 10) + Math.round(g.a * 10)) & 1) ? 'L' : 'R')) : undefined }));
-      const m = s.ext ? mat : (mat === 'clay' ? 'clay' : 'block');
+      const m = liftWall ? 'rcc' : s.ext ? mat : (mat === 'clay' ? 'clay' : 'block');
       const srcKey = `f${f}:${s.axis}${s.c}`;
       const tint = s.ext ? ((D.tints && D.tints[srcKey]) || (frontTint && s.axis === 'x' && s.out > 0 ? frontTint : (F.tint || undefined))) : undefined;
-      const extra = s.ext ? { tint, trim: style.trim, doorTint: style.wood, chajja: !!D.chajja || D.style === 'classic' } : { interior: true, trim: '#ece7dc', doorTint: style.wood };
+      const extra = s.ext ? { tint, trim: style.trim, doorTint: style.wood, chajja: !!D.chajja || D.style === 'classic' } : { interior: true, trim: '#ece7dc', doorTint: style.wood, core: liftWall };
       if (s.axis === 'x') {
         // walking +x; outward normal for a "line" = right of walking direction = (tz,-tx) -> (0,-1) i.e. -z; flip when outward is +z
         shapes.push({ t: 'line', x0: a0, z0: c, x1: a1, z1: c, y0, h, thick: th, mat: m, gaps, flip: s.ext ? s.out > 0 : false, f, ...extra, src: srcKey });
@@ -225,6 +242,7 @@ export function compileDesign(D) {
     const holes = [];
     const nextHasWell = f + 1 < floors.length && floors[f + 1].rooms.some((r) => r.type === 'stairs');
     for (const W of wells) if (nextHasWell) for (const r of stairHoles(W, h)) holes.push(r);
+    if (f + 1 < floors.length) for (const R of Rs) if (R.type === 'lift' && floors[f + 1].rooms.some((q) => q.type === 'lift' && Math.abs(q.x0 - R.x0) < 0.1 && Math.abs(q.z0 - R.z0) < 0.1)) holes.push({ x0: R.x0, x1: R.x1, z0: R.z0, z1: R.z1 });
     const roofSlab = f === floors.length - 1;
     const addSlab = (r) => {
       for (const p of subRects(r, holes)) {
@@ -320,7 +338,7 @@ export function compileDesign(D) {
       for (let x = ft.x0 + sp / 2; x < ft.x1; x += sp) shapes.push({ t: 'box', cx: x, cz: zf + dz / 2 + (ft.off || 0), y0: ya, w: th, d: dz, h: yb - ya, f: ft.f0, tint: ft.tint || style.fin, anchored: true, fin: true });
     } else if (ft.t === 'panel') {
       const ya = base[ft.f0] + (ft.dy || 0), yb = ft.h ? ya + ft.h : base[ft.f1] + H[ft.f1];
-      shapes.push({ t: 'box', cx: (ft.x0 + ft.x1) / 2, cz: (ft.zf ?? bz1) + (ft.depth || 0.1) / 2, y0: ya, w: ft.x1 - ft.x0, d: ft.depth || 0.1, h: yb - ya, f: ft.f0, tint: ft.tint || style.accent, anchored: true });
+      shapes.push({ t: 'box', cx: (ft.x0 + ft.x1) / 2, cz: (ft.zf ?? bz1) + (ft.depth || 0.1) / 2, y0: ya, w: ft.x1 - ft.x0, d: ft.depth || 0.1, h: yb - ya, f: ft.f0, tint: ft.tint || (ft.tile ? undefined : style.accent), tile: ft.tile, anchored: true });
     } else if (ft.t === 'frame') {
       const dp = ft.depth || 0.5, th = ft.th || 0.35, yb = base[ft.f1] + H[ft.f1] + SLAB, zf = ft.zf ?? bz1;
       const ya = base[ft.f0 || 0];
@@ -328,6 +346,48 @@ export function compileDesign(D) {
       shapes.push({ t: 'box', cx: ft.x0 + th / 2, cz: zf + dp / 2, y0: ya, w: th, d: dp, h: yb - ya, f: 0, tint: tn, anchored: true });
       shapes.push({ t: 'box', cx: ft.x1 - th / 2, cz: zf + dp / 2, y0: ya, w: th, d: dp, h: yb - ya, f: 0, tint: tn, anchored: true });
       shapes.push({ t: 'box', cx: (ft.x0 + ft.x1) / 2, cz: zf + dp / 2, y0: yb - th, w: ft.x1 - ft.x0, d: dp, h: th, f: 0, tint: tn, anchored: true });
+    } else if (['cframe', 'pods', 'jali', 'louvre', 'volume'].includes(ft.t)) {
+      const face = ft.face || 'front', pl = PLANES[face] || PLANES.front;
+      const org = face === 'front' ? [0, 0, ft.zf ?? bz1] : face === 'back' ? [0, 0, bz0] : face === 'right' ? [bx1, 0, 0] : [bx0, 0, 0];
+      const f0 = ft.f0 ?? ft.f ?? 1, f1 = ft.f1 ?? f0;
+      const vLo = base[f0] + (ft.dy || 0), vHi = ft.vTop != null ? ft.vTop : base[f1] + H[f1] + SLAB;
+      const common = { o: org, face, f: f0, tint: ft.tint, tile: ft.tile };
+      if (ft.t === 'cframe') {
+        // thick rounded frame stroked around a window group (C-frame of the modern houses)
+        const path = prof.rrect(ft.u0, vLo, ft.u1, vHi, ft.r ?? 0.9, 7);
+        shapes.push({ t: 'sweep', ...common, path, closed: true, w: ft.w ?? 0.35, depth: ft.depth ?? 0.6, d0: ft.d0 ?? -0.1, cant: true });
+      } else if (ft.t === 'pods') {
+        // projecting window pods: an outline pulled out of the wall with the window hole left open
+        for (const it of ft.items || []) {
+          const a = base[it.f ?? f0] + (it.dy ?? 0.0), b = a + (it.hgt ?? 2.6), w = it.w ?? ft.w ?? 0.28, u0 = it.u0, u1 = it.u1, cu = (u0 + u1) / 2, cv = (a + b) / 2;
+          let out, hole;
+          const shrink = (pts) => pts.map(([u, v]) => [cu + (u - cu) * ((u1 - u0 - 2 * w) / (u1 - u0)), cv + (v - cv) * ((b - a - 2 * w) / (b - a))]);
+          if (it.kind === 'tri') { out = [[u0, a], [u1, a], [cu, b]]; hole = [[cu - (cu - u0) * 0.5, a + w], [cu + (u1 - cu) * 0.5, a + w], [cu, b - w * 2.4]]; }
+          else if (it.kind === 'arch') { out = prof.arch(u0, a, u1, b); hole = shrink(out); }
+          else { out = prof.rrect(u0, a, u1, b, it.r ?? 0.5, 6); hole = shrink(out); }
+          shapes.push({ t: 'extrude', ...common, f: it.f ?? f0, tint: it.tint ?? ft.tint, outline: out, holes: [hole], depth: it.depth ?? ft.depth ?? 0.9, d0: 0, res: 0.14, cant: true });
+        }
+      } else if (ft.t === 'jali') {
+        // laser-cut tree of life: recursive branches as slim bars, visual ornament
+        const rnd = (() => { let q = (ft.seed || 5) >>> 0; return () => ((q = (q * 1664525 + 1013904223) >>> 0) / 4294967296); })();
+        const cu = (ft.u0 + ft.u1) / 2, h0 = vHi - vLo, trunkH = h0 * 0.28;
+        const seg = (u, v, ang, len, w, depth) => {
+          const u2 = u + Math.sin(ang) * len, v2 = v + Math.cos(ang) * len;
+          shapes.push({ t: 'sweep', ...common, tile: undefined, path: [[u, v], [u2, v2]], w, depth: 0.04, d0: 0.0, deco: true, tint: ft.motif || '#e9dcb4' });
+          if (depth <= 0) return;
+          const k = 2 + (rnd() < 0.5 ? 1 : 0);
+          for (let i = 0; i < k; i++) seg(u2, v2, ang + (i / (k - 1) - 0.5) * 1.5 + (rnd() - 0.5) * 0.3, len * (0.66 + rnd() * 0.1), Math.max(0.018, w * 0.68), depth - 1);
+        };
+        seg(cu, vLo + 0.2, 0, trunkH, 0.07, 4);
+      } else if (ft.t === 'louvre') {
+        const pitch = ft.pitch ?? 0.14, th = ft.th ?? 0.07;
+        for (let v = vLo; v + th <= vHi + 1e-6; v += pitch) shapes.push({ t: 'extrude', ...common, outline: [[ft.u0, v], [ft.u1, v], [ft.u1, v + th], [ft.u0, v + th]], depth: ft.depth ?? 0.06, d0: ft.d0 ?? 0, deco: true, tile: undefined });
+      } else if (ft.t === 'volume') {
+        // projecting solid mass (cantilevered box / cheek) cladded in stone, wood or paint
+        const ww = ft.u1 - ft.u0;
+        const vH = ft.h != null ? vLo + ft.h : vHi;
+        shapes.push({ t: 'extrude', ...common, outline: [[ft.u0, vLo], [ft.u1, vLo], [ft.u1, vH], [ft.u0, vH]], depth: ft.d ?? 1.2, d0: ft.d0 ?? 0, res: Math.max(0.4, Math.min(ww, vH - vLo) / 3), cant: true });
+      }
     } else if (ft.t === 'planter') {
       shapes.push({ t: 'box', cx: ft.x, cz: ft.z, y0: ft.y || 0, w: ft.w || 1.2, d: ft.d || 0.5, h: 0.5, f: 0, tint: '#3f6b36', anchored: true });
     } else if (ft.t === 'tank') {
@@ -381,9 +441,17 @@ export function compileDesign(D) {
     furnish(R, doorPts.get(R.id) || [], base[R.f] + 0.02, (x, z) => { const s = sl.find((p) => x >= p.x0 && x <= p.x1 && z >= p.z0 && z <= p.z1); return s ? s.tag : null; }, furn, hazards, style, D.seed || 1);
   });
 
+  const lifts = [];
+  { const seen = new Set();
+    floors.forEach((F, f) => { for (const r of F.rooms) if (r.type === 'lift') {
+      const k = r.x0.toFixed(2) + ':' + r.z0.toFixed(2);
+      let L = lifts.find((q) => q.key === k);
+      if (!L) { L = { key: k, style: (r.lift && r.lift.style) || 'passenger', x0: snap(r.x0), x1: snap(r.x1), z0: snap(r.z0), z1: snap(r.z1), levels: [], floors: [] }; lifts.push(L); }
+      L.levels.push(base[f]); L.floors.push(f);
+    } }); }
   const height = base[floors.length];
   const plan = floors.map((F) => (F._segs || []).map((s) => ({ axis: s.axis, c: s.c, a0: s.a0, a1: s.a1, ext: s.ext, open: !!s.open, gaps: s.gaps.map((g) => ({ a: g.a, wid: g.wid, door: !!g.door, pane: !!g.pane, garage: !!g.garage })) })));
-  return { shapes, furn, rooms, hazards, stairs: stairsOut, issues, base, bounds, height, style, plan };
+  return { shapes, furn, rooms, hazards, stairs: stairsOut, lifts, issues, base, bounds, height, style, plan };
 }
 
 // ---------- openings ----------

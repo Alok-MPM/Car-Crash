@@ -178,6 +178,7 @@ const inp = { throttle: 0, brake: 0, steer: 0, hb: 0 };
 let kbThr = 0, kbBrk = 0, pedThr = 0, pedBrk = 0, steerKb = 0, tiltSteer = 0, touchSteer = 0, touchGas = 0, touchBrk = 0, touchHb = 0, touchHorn = 0;
 let horn = false;
 const person = new Person(ctx);
+ctx.person = person;
 // ---------- everyday life: market, fridge, stove, table, bed ----------
 const life = { cash: 500, veg: 0, meal: 0, hunger: 60, cooking: 0 };
 function bag() { const bc = $('bCar'); if (bc) bc.style.display = person.active ? '' : 'none'; const e = $('bag'); if (e) { e.style.display = person.active ? 'block' : 'none'; e.innerHTML = `<b>Rs ${life.cash}</b> &nbsp; Vegetables ${life.veg} &nbsp; Meals ${life.meal} &nbsp; Hunger ${Math.round(life.hunger)}%`; } }
@@ -692,6 +693,24 @@ const H = 1 / 120;
 let warmUntil = performance.now() / 1000 + 6;
 let acc = 0, last = 0, hudAcc = 0, fpsAvg = 16, lowT = 0, highT = 0;
 let engineT = 0;
+
+// ---- lift floor card: appears when the walking person is inside a lift cabin ----
+const liftEl = (() => { const d = document.createElement('div'); d.id = 'liftCard'; d.style.cssText = 'position:fixed;right:max(14px,env(safe-area-inset-right,0px));top:50%;transform:translateY(-50%);z-index:30;display:none;background:rgba(14,17,22,.88);border:1px solid rgba(255,255,255,.12);border-left:3px solid #f5b81c;border-radius:12px;padding:10px 12px;max-height:72vh;overflow:auto;touch-action:pan-y;font:700 12px system-ui;color:#c9d1db;min-width:92px'; document.body.appendChild(d); return d; })();
+let liftKey = '', liftUi = null;
+function updateLiftCard(u) {
+  liftUi = u;
+  if (!u) { if (liftEl.style.display !== 'none') { liftEl.style.display = 'none'; liftKey = ''; } return; }
+  if (liftKey !== u.key) {
+    liftKey = u.key; liftEl.style.display = 'block';
+    let h = '<div style="letter-spacing:.14em;font-size:10px;color:#98a3b3;margin-bottom:8px">SELECT FLOOR</div><div id="liftGrid" style="display:grid;grid-template-columns:repeat(' + (u.labels.length > 8 ? 3 : 2) + ',1fr);gap:8px">';
+    for (let i = u.labels.length - 1; i >= 0; i--) h += '<button data-i="' + i + '" style="min-width:52px;min-height:52px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:#1d232c;color:#e8edf3;font:800 18px system-ui;touch-action:manipulation">' + u.labels[i] + '</button>';
+    liftEl.innerHTML = h + '</div><div id="liftSt" style="margin-top:8px;font-size:11px;color:#f5b81c;min-height:14px"></div>';
+    for (const b of liftEl.querySelectorAll('button')) b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (liftUi) scene.structures.liftGo(liftUi.L, +b.dataset.i); });
+  }
+  const bs = liftEl.querySelectorAll('button');
+  for (const b of bs) { const i = +b.dataset.i; const on = i === (u.moving ? u.dest : u.cur); b.style.background = on ? '#f5b81c' : '#1d232c'; b.style.color = on ? '#14110a' : '#e8edf3'; b.style.opacity = u.moving && i !== u.dest ? '.5' : '1'; }
+  const st = liftEl.querySelector('#liftSt'); if (st) st.textContent = u.moving ? 'Going to ' + u.labels[u.dest] : 'Floor ' + u.labels[u.cur];
+}
 function watchBuildings() {
   const pts = [];
   for (const c of cars) { const b = c.vehicle ? c.vehicle.body : null; if (!b) continue; const sp = Math.hypot(b.v[0], b.v[2]); if (c !== player && sp < 1 && !c.vehicle.hyperOn) { pts.push({ x: b.pos[0], z: b.pos[2], r: 6 }); continue; } pts.push({ x: b.pos[0], z: b.pos[2], r: 14 + sp * 1.4 }); }
@@ -745,7 +764,7 @@ function frame(t) {
   soundBudget = 5;
   scrape = 0;
   readInput(dt);
-  if (person.active && !menuOpen) { person.update(dt, { fwd: inp.throttle - inp.brake, turn: inp.steer, run: inp.hb, jump: horn }); const vi = player.vehicle.in; vi.throttle = 0; vi.brake = 0.5; vi.steer = 0; vi.handbrake = 1; }
+  if (person.active && !menuOpen && !scene.structures.riding) { person.update(dt, { fwd: inp.throttle - inp.brake, turn: inp.steer, run: inp.hb, jump: horn }); const vi = player.vehicle.in; vi.throttle = 0; vi.brake = 0.5; vi.steer = 0; vi.handbrake = 1; }
   else if (menuOpen) { player.vehicle.in.throttle = 0; player.vehicle.in.brake = 0.4; player.vehicle.in.steer = 0; player.vehicle.in.handbrake = 1; }
   else { const vi = player.vehicle.in; vi.throttle = inp.throttle; vi.brake = inp.brake; vi.steer = inp.steer; vi.handbrake = inp.hb; vi.reverse = reverseOn; }
   if (slowT > 0) slowT -= dt;
@@ -755,6 +774,7 @@ function frame(t) {
   const _t1 = performance.now();
   const sdt = dt * timeScale;
   scene.update(sdt);
+  updateLiftCard(person.active ? scene.structures.liftUI(person) : null);
   const _t2 = performance.now();
   for (const c of cars) c.update(sdt);
   fx.update(sdt);
@@ -812,6 +832,7 @@ function frame(t) {
   } else if (sfx.ctx) { sfx.engine(player.spec, { rpm: player.spec.idle, tl: 0, revLimiter: false, boost: 0 }, 0); sfx.continuous(0, 0, 0); }
   // render
   r.time = now;
+  if (window.__camOv) { camPos = window.__camOv.eye; camLook = window.__camOv.look; if (window.__camOv.fov) camFov = window.__camOv.fov; }
   r.begin({ eye: camPos, target: camLook, fov: camFov, near: 0.25, far: 9000, shadowCenter: [player.body.pos[0], 0, player.body.pos[2]] });
   fx.beginBlobs();
   const _d0 = performance.now();

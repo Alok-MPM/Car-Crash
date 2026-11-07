@@ -11,6 +11,60 @@
 //   col    {cx,cz,y0,h,s}                                     square RCC column
 const ROW_H = 1.45, PANEL_W = 1.3;
 
+// ---------- 2D profile helpers for extrude / sweep (all in a vertical "facade plane": u right, v up) ----------
+export const prof = {
+  // rounded rectangle outline (closed polyline, counter-clockwise)
+  rrect(u0, v0, u1, v1, r = 0.3, n = 6) {
+    r = Math.max(0, Math.min(r, (u1 - u0) / 2, (v1 - v0) / 2)); const pts = [];
+    const arc = (cu, cv, a0) => { for (let k = 0; k <= n; k++) { const a = a0 + (k / n) * Math.PI / 2; pts.push([cu + Math.cos(a) * r, cv + Math.sin(a) * r]); } };
+    arc(u1 - r, v0 + r, -Math.PI / 2); arc(u1 - r, v1 - r, 0); arc(u0 + r, v1 - r, Math.PI / 2); arc(u0 + r, v0 + r, Math.PI);
+    return pts;
+  },
+  // arch / tombstone: straight jambs and a semicircular head (door and window shapes)
+  arch(u0, v0, u1, v1, n = 10) { const R = (u1 - u0) / 2, cu = (u0 + u1) / 2, sp = v1 - R, pts = [[u0, v0], [u1, v0], [u1, sp]]; for (let k = 1; k < n; k++) { const a = (k / n) * Math.PI; pts.push([cu + Math.cos(a) * R, sp + Math.sin(a) * R]); } pts.push([u0, sp]); return pts; },
+  circle(cu, cv, r, n = 20) { const p = []; for (let k = 0; k < n; k++) { const a = (k / n) * Math.PI * 2; p.push([cu + Math.cos(a) * r, cv + Math.sin(a) * r]); } return p; },
+  // quadratic bezier flattened to n points
+  quad(a, c, b, n = 10) { const p = []; for (let k = 0; k <= n; k++) { const t = k / n, i = 1 - t; p.push([i * i * a[0] + 2 * i * t * c[0] + t * t * b[0], i * i * a[1] + 2 * i * t * c[1] + t * t * b[1]]); } return p; },
+  cubic(a, c1, c2, b, n = 14) { const p = []; for (let k = 0; k <= n; k++) { const t = k / n, i = 1 - t; p.push([i * i * i * a[0] + 3 * i * i * t * c1[0] + 3 * i * t * t * c2[0] + t * t * t * b[0], i * i * i * a[1] + 3 * i * i * t * c1[1] + 3 * i * t * t * c2[1] + t * t * t * b[1]]); } return p; },
+};
+
+// facade planes: origin handled by the caller. u = along the facade (to the right when looking at it), n = outward
+export const PLANES = { front: { U: [1, 0, 0], N: [0, 0, 1] }, back: { U: [-1, 0, 0], N: [0, 0, -1] }, right: { U: [0, 0, -1], N: [1, 0, 0] }, left: { U: [0, 0, 1], N: [-1, 0, 0] } };
+
+// even-odd scan-line decomposition of a polygon with holes into rectangles (so any 2D drawing becomes boxes the physics understands)
+export function polyRects(outline, holes, res) {
+  const loops = [outline, ...(holes || [])];
+  let vmin = 1e9, vmax = -1e9; for (const L of loops) for (const p of L) { vmin = Math.min(vmin, p[1]); vmax = Math.max(vmax, p[1]); }
+  const rows = Math.max(1, Math.ceil((vmax - vmin) / res - 1e-6)), dv = (vmax - vmin) / rows;
+  const spans = [];
+  for (let r = 0; r < rows; r++) {
+    const v = vmin + (r + 0.5) * dv, xs = [];
+    for (const L of loops) for (let i = 0; i < L.length; i++) {
+      const a = L[i], b = L[(i + 1) % L.length];
+      if ((a[1] <= v && b[1] > v) || (b[1] <= v && a[1] > v)) xs.push(a[0] + ((v - a[1]) / (b[1] - a[1])) * (b[0] - a[0]));
+    }
+    xs.sort((p, q) => p - q);
+    const row = []; for (let i = 0; i + 1 < xs.length; i += 2) if (xs[i + 1] - xs[i] > 0.02) row.push([xs[i], xs[i + 1]]);
+    spans.push(row);
+  }
+  // merge vertically identical spans into taller rectangles
+  const out = [], open = [];
+  const same = (a, b) => Math.abs(a[0] - b[0]) < res * 0.45 && Math.abs(a[1] - b[1]) < res * 0.45;
+  for (let r = 0; r <= rows; r++) {
+    const row = r < rows ? spans[r] : [];
+    const still = [];
+    for (const o of open) {
+      const m = row.find((s) => same(s, [o.u0, o.u1]));
+      if (m) { o.v1 = vmin + (r + 1) * dv; still.push(o); row.splice(row.indexOf(m), 1); } else out.push(o);
+    }
+    for (const sp of row) still.push({ u0: sp[0], u1: sp[1], v0: vmin + r * dv, v1: vmin + (r + 1) * dv });
+    open.length = 0; open.push(...still);
+  }
+  for (const o of open) out.push(o);
+  return out;
+}
+
+
 // quaternion from the rotation matrix whose columns are x,y,z axes
 function quatFromBasis(X, Y, Z) {
   const m00 = X[0], m10 = X[1], m20 = X[2], m01 = Y[0], m11 = Y[1], m21 = Y[2], m02 = Z[0], m12 = Z[1], m22 = Z[2];
@@ -130,7 +184,7 @@ export function shapeElements(shapes, add, newRun) {
     }
   };
 
-  const exOf = (S) => { const o = {}; for (const k of ['tint', 'interior', 'anchored', 'parapet', 'railing', 'src', 'slabLook', 'roof', 'stair', 'tag', 'cant', 'fin', 'ghost', 'trim', 'sill', 'chajja', 'doorTint']) if (S[k] !== undefined) o[k] = S[k]; if (S.interior) o.out = null; return o; };
+  const exOf = (S) => { const o = {}; for (const k of ['tint', 'interior', 'anchored', 'parapet', 'railing', 'src', 'slabLook', 'roof', 'stair', 'tag', 'cant', 'fin', 'ghost', 'trim', 'sill', 'chajja', 'doorTint', 'tile', 'core']) if (S[k] !== undefined) o[k] = S[k]; if (S.interior) o.out = null; return o; };
   let runId = 100000;
   for (const S of shapes) {
     const mat = S.mat || 'rcc';
@@ -178,6 +232,33 @@ export function shapeElements(shapes, add, newRun) {
     } else if (S.t === 'box') {
       const o = { w: S.w, d: S.d, h: S.h };
       panel('wall', S.mat || 'rcc', true, [S.cx, (S.y0 || 0) + S.h / 2, S.cz], [0, 1, 0], [0, 0, 1], S.w, S.h, S.d, runId++, 0, S.w, { f: S.f || 0, rest: { solidBlock: true, ...exOf(S) } });
+    } else if (S.t === 'extrude' || S.t === 'sweep') {
+      // a 2D drawing in a facade plane pulled out to a solid. extrude: outline (+ holes) -> rectangles; sweep: a path walked by a bar of width w.
+      // Everything lands as oriented boxes: it renders and breaks with the same rules as walls. deco:true = visual only (small ornaments).
+      const pl = PLANES[S.face || 'front'] || PLANES.front, U = pl.U, N = pl.N, V = [0, 1, 0], o = S.o || [0, 0, 0];
+      const at = (u, v, d = 0) => [o[0] + U[0] * u + N[0] * d, o[1] + v, o[2] + U[2] * u + N[2] * d];
+      const dep = S.depth || 0.3, d0 = S.d0 || 0, dc = d0 + dep / 2;
+      const mat2 = S.mat || 'rcc', run = runId++;
+      const place = (cu, cv, len, hgt, X, m) => {
+        if (S.deco) decoBox(null, at(cu, cv, dc), X, m, N, len / 2, hgt / 2, dep / 2, S.tint, S.f || 0);
+        else panel('wall', mat2, S.str ?? true, at(cu, cv, dc), m, N, len, hgt, dep, run, 0, len, { f: S.f || 0, rest: { solidBlock: true, anchored: S.anchored !== false, cant: S.cant, ...exOf(S) } });
+      };
+      if (S.t === 'extrude') {
+        for (const r of polyRects(S.outline, S.holes, S.res || 0.15)) place((r.u0 + r.u1) / 2, (r.v0 + r.v1) / 2, r.u1 - r.u0, r.v1 - r.v0, U, V);
+      } else {
+        const P = S.path, w = S.w || 0.2, n = P.length, last = S.closed ? n : n - 1;
+        for (let i = 0; i < last; i++) {
+          const a = P[i], b = P[(i + 1) % n], du = b[0] - a[0], dv = b[1] - a[1], L = Math.hypot(du, dv);
+          if (L < 1e-4) continue;
+          const tx = du / L, ty = dv / L;
+          const X = [U[0] * tx + V[0] * ty, U[1] * tx + V[1] * ty, U[2] * tx + V[2] * ty];            // along the path
+          const W = [-U[0] * ty + V[0] * tx, -U[1] * ty + V[1] * tx, -U[2] * ty + V[2] * tx];         // across the bar (in plane)
+          const lenx = L + w * 0.45;                                                                      // overlap so corners close up
+          const cu = (a[0] + b[0]) / 2, cv = (a[1] + b[1]) / 2;
+          if (S.deco) decoBox(null, at(cu, cv, dc), X, W, N, lenx / 2, w / 2, dep / 2, S.tint, S.f || 0);
+          else panel('wall', mat2, S.str ?? true, at(cu, cv, dc), W, N, lenx, w, dep, run, 0, lenx, { f: S.f || 0, rest: { solidBlock: true, anchored: S.anchored !== false, cant: S.cant, ...exOf(S) } });
+        }
+      }
     } else if (S.t === 'col') {
       add({ kind: 'col', mat: 'rcc', str: true, f: S.f || 0, run: null, axis: 'x', s0: 0, s1: 0, cx: S.cx, cy: (S.y0 || 0) + S.h / 2, cz: S.cz, hx: S.s / 2, hy: S.h / 2, hz: S.s / 2, out: null, interior: false });
     }

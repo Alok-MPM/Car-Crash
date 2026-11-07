@@ -1,6 +1,7 @@
 // Architect: a short brief (kind, size, floors, style) -> a complete DESIGN (rooms on every floor, stair well, head-house, facade features).
 // The Design Lab edits the same DESIGN, so a generated house can be changed room by room afterwards.
 import { SLAB, T_EXT, STYLES } from './compile.js';
+import { pickLift, shaftOf, LIFT_STYLES } from './lift.js';
 
 const q25 = (v) => Math.round(v * 4) / 4;
 function rng(seed) { let s = (seed >>> 0) || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
@@ -49,12 +50,19 @@ function building(b) {
   const sx0 = tower ? q25(-Wd / 2) : ix0;                // stair strip x range
   const sx1 = sx0 + Wd;
   const stairs = { type: 'stairs', x0: sx0, x1: sx1, z0: iz0, z1: zF };
-  const hallF = { type: 'hall', x0: sx0, x1: sx1, z0: zF, z1: iz1 };
-  const zones = tower ? [[ix0, sx0], [sx1, ix1]] : [[sx1, ix1]];
+  // lift: next to the stairs, door onto the same hall, in every building above three floors (and any tower)
+  const wantLift = b.lift ?? (N > 3 || tower);
+  const liftId = wantLift ? (b.liftStyle || pickLift(kind, style, b.seed || 7, N)) : null;
+  const SH = wantLift ? shaftOf(liftId) : null;
+  const hx1 = wantLift ? q25(sx1 + SH.w) : sx1;          // hall reaches over the lift front
+  const hallF = { type: 'hall', x0: sx0, x1: hx1, z0: zF, z1: iz1 };
+  const liftRoom = wantLift ? { type: 'lift', x0: sx1, x1: hx1, z0: q25(zF - SH.d), z1: zF, lift: { style: liftId, dw: LIFT_STYLES[liftId].dw } } : null;
+  const liftStore = wantLift && liftRoom.z0 - iz0 > 1.2 ? { type: 'store', x0: sx1, x1: hx1, z0: iz0, z1: liftRoom.z0 } : null;
+  const zones = tower ? [[ix0, sx0], [hx1, ix1]] : [[hx1, ix1]];
   const floors = [];
   let frontRooms = [];                                   // for balconies: first-floor front rooms
   for (let f = 0; f < N; f++) {
-    const rooms = [stairs, hallF].map((r) => ({ ...r }));
+    const rooms = [stairs, hallF, ...(liftRoom ? [liftRoom] : []), ...(liftStore ? [liftStore] : [])].map((r) => ({ ...r }));
     for (const [zx0, zx1] of zones) {
       const wz = zx1 - zx0;
       if (f === 0) {
@@ -87,7 +95,7 @@ function building(b) {
           : [{ type: 'bedroom', w: 1, min: 2.8 }, { type: 'bath', w: 0.45, min: 1.5 }, { type: 'bedroom', w: 0.9, min: 2.8 }]));
       }
     }
-    floors.push({ h: H, rooms, openings: [] });
+    floors.push({ h: H, rooms, openings: [], frontGlass: b.frontGlass && b.frontGlass[f] ? b.frontGlass[f] : undefined, tint: b.floorTints && b.floorTints[f] ? b.floorTints[f] : undefined });
   }
   // head-house over the stair well: roof access
   floors.push({ h: 2.4, headhouse: true, openings: [], rooms: [{ ...stairs }, { type: 'hall', x0: sx0, x1: sx1, z0: zF, z1: Math.min(iz1, zF + 1.5) }] });
@@ -100,7 +108,7 @@ function building(b) {
   const mk = (o) => features.push({ ...o });
   if (style === 'modern' || style === 'dark' || style === 'glass') {
     // projecting balcony slab over the entrance (canopy) and a round balcony in front of the master room on the next floor
-    const canopyX0 = sx0 - 0.1, canopyX1 = sx1 + 0.1;
+    const canopyX0 = sx0 - 0.1, canopyX1 = hx1 + 0.1;
     if (!tower) {
       if (o.canopy) mk({ t: 'balcony', f: 1, x0: canopyX0, x1: canopyX1, d: 1.6, rail: 'none', zf, slabTint: S.slab, round: 0 });
       if (o.balcony) for (const r of frontRooms) {
@@ -122,11 +130,12 @@ function building(b) {
     // classic / brick: small balconies with solid rails
     for (const r of frontRooms) { const bw = Math.min(r.x1 - r.x0 - 0.8, 2.6), cx = (r.x0 + r.x1) / 2; mk({ t: 'balcony', f: 1, x0: cx - bw / 2, x1: cx + bw / 2, d: 1.2, rail: 'solid', zf, slabTint: S.slab }); }
   }
+  if (b.extraFeatures) for (const x of b.extraFeatures) mk(x);
   if (o.tank) mk({ t: 'tank', x: q25(ix1 - 1.5), z: q25(iz0 + 1.5) });
 
   return {
     name: b.name || (tower ? 'Tower' : 'House'), style, chajja: !!(b.opts && b.opts.chajja), seed: b.seed || 7, mat: b.mat || S.mat, openStyle: b.openStyle || (style === 'classic' ? 'arch' : 'rect'),
-    glazing: tower, floors, features, parapet: true, brief: { kind, w, d, floors: N, garage: !!b.garage, style, shopGround: !!b.shopGround, openStyle: b.openStyle, opts: b.opts || {}, seed: b.seed || 7 },
+    glazing: tower, floors, features, parapet: true, brief: { kind, w, d, floors: N, lift: wantLift, liftStyle: liftId, garage: !!b.garage, style, shopGround: !!b.shopGround, openStyle: b.openStyle, opts: b.opts || {}, seed: b.seed || 7 },
   };
 }
 
