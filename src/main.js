@@ -119,6 +119,7 @@ function populateNPCs() {
 let soundBudget = 0;
 function blast(pos, R = 11, power = 10) {
   fx.explosion(pos); sfx.boom(pos);
+  if (scene.land && scene.land.roadHole && pos[1] < 4) scene.land.roadHole(pos[0], pos[2], Math.max(0.9, R * 0.2));
   lastBlast = { pos: pos.slice(), t: 0 };
   shake = Math.max(shake, clamp(1.2 - dist(pos, camPos) / 40, 0.1, 1.2));
   for (const o of world.bodies) {
@@ -456,16 +457,18 @@ function gotoCity() {
   camYaw = -Math.PI / 2;
   toast('City: roads, lots, parking, farms around. Buildings stream in as you drive', 'City');
 }
-let streetIx = 0;
 function gotoStreet() {
-  if (!player || !scene.streets || !scene.streets.length) return;
-  const n = scene.streets.length, k = streetIx++ % (n * 2), st = scene.streets[k >> 1], back = k & 1;
+  // the designed (showcase) buildings stand on real lots of the city; this puts the car on the road in front of the next one
+  const P = scene.cityPlan; if (!player || !P || !P.showcase.length) return;
+  const L = P.showcase[streetIx++ % P.showcase.length];
   if (person.active) backToCar();
-  const yaw = back ? Math.PI : 0, z = back ? st.zBackFar : st.zFar;
-  player.vehicle.reset([st.x, 0, z], yaw);
-  camYaw = yaw;
-  toast(`${st.name} - ${back ? 'back' : 'front'} road, drive straight in`, 'Test street');
+  const z = L.roadC + 3;
+  scene.city.prime([{ x: L.x, z: L.z }], 4);
+  player.vehicle.reset([L.x, 0, z], 0);
+  camYaw = 0;
+  toast(`${L.show} - facing the building from the road`, 'Showcase');
 }
+let streetIx = 0;
 function spawnAhead() {
   if (!player) return;
   const b = player.body;

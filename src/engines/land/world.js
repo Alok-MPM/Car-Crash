@@ -134,7 +134,9 @@ export class Scene {
   buildStatic() {
     const { r, world } = this;
     // ground
-    this.ground = r.createMesh(plane(24000, 24000, 1, 1), { mat: { kind: 4, base: [1, 1, 1], texScale: 1 } });
+    // the world itself is natural ground (soil / dry grass, procedural); tarmac exists only where it was built (proving ground + roads)
+    this.ground = r.createMesh(plane(24000, 24000, 1, 1), { mat: { kind: 7, base: [0.2, 0.2, 0.085], texScale: 1 } });
+    this.tarmac = [[0, -3000, 52, 6260], [0, -300, 360, 820]].map(([x, z, w, d]) => ({ m: r.createMesh(plane(w, d, 1, 1), { mat: { kind: 4, base: [1, 1, 1], texScale: 1, poly: 1 } }), model: m4.fromTRS(new Float32Array(16), [x === 0 && w === 360 ? 5 : x, 0.003, z], [0, 0, 0, 1], 1) }));
     // markings: one merged mesh (white / yellow)
     const white = new Builder([0, 0, 0]), yellow = new Builder([0, 0, 0]);
     const quad = (b, x0, z0, x1, z1) => {
@@ -200,9 +202,9 @@ export class Scene {
         slab(lineW, cx - wr / 2 + 0.5, zf + 1.3, cx + wr / 2 - 0.5, zf + 1.6, 0.012, 0.016);  // stop line in front of the building
       }
     };
-    lay(['house', 'villa', 'tower', 'roundTower', 'podHouse'], -1);
-    lay(['houseSmall', 'shop', 'market', 'mandir', 'louvreHouse', 'woodHouse'], 1);
-    {
+    // (the old test street is gone: the buildings now stand on the lots of the city's road structure - see city.js)
+    void lay;
+    if (this.streets.length) {
       const rf = roadB.finish(), wf2 = lineW.finish(), yf2 = lineY.finish();
       rf.groups.forEach((g) => (g.mat = { kind: 0, base: [0.1, 0.1, 0.11], rough: 0.92 }));
       wf2.groups.forEach((g) => (g.mat = { kind: 0, base: [0.82, 0.82, 0.8], rough: 0.7, poly: true }));
@@ -212,6 +214,7 @@ export class Scene {
     // ---- the city + land (seeded, streamed): roads of every type, lots with parking, trees, farmland
     this.cityPlan = planCity({ seed: 7, cx: 1500, cz: -1200 });
     this.land = buildLand(r, this.cityPlan);
+    this.streets = [];
     this.city = new CityStreamer(this.cityPlan, S);
     // end wall of the runway (stacked concrete blocks)
     S.addBarrier({ x: 0, z: -6100, len: 60, th: 3, h: 6, rows: 2, seg: 3 });
@@ -348,10 +351,12 @@ export class Scene {
   draw(cam) {
     const { r } = this;
     r.add(this.ground, this._gm || (this._gm = m4.fromTRS(new Float32Array(16), [0, 0, 0], [0, 0, 0, 1], 1)), { cast: false });
+    for (const t of this.tarmac) r.add(t.m, t.model, { cast: false });
     for (const m of this.marks) r.add(m, this.markModel, { cast: false });
     if (this.streetMeshes) for (const m of this.streetMeshes) r.add(m, this.markModel, { cast: false });
     if (this.land) {
       for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
+      for (const m of this.land.holes) r.add(m, this.markModel, { cast: false });
       for (const t of this.land.treeMeshes) { if (Math.abs(t.cx - cam[0]) < 520 && Math.abs(t.cz - cam[2]) < 520) r.add(t.m, this.markModel, { cast: false }); }
     }
     const cx = cam[0], cz = cam[2];

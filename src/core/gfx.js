@@ -411,7 +411,7 @@ export class Renderer {
     gl.uniform1f(u.uTexScale, m.texScale || 1);
     if (m.tex) { gl.uniform1f(u.uTexOn, 1); gl.bindTexture(gl.TEXTURE_2D, m.tex); } else gl.uniform1f(u.uTexOn, 0);
     if (m.doubleSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
-    if (m.poly) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -6); } else gl.disable(gl.POLYGON_OFFSET_FILL);
+    if (m.poly) { const lv = m.poly === true ? 2 : m.poly; gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-lv, -3 * lv); } else gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
   // ---- streams ----

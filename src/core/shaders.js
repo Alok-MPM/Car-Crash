@@ -157,6 +157,14 @@ void main(){
     albedo = vec3(0.); emis = uEmis * vCol;
   } else if (uKind == 5) {
     albedo = uBase * vCol; ao = 0.8 + 0.2 * smoothstep(0.,0.4,abs(vNrm.y));
+  } else if (uKind == 7) {
+    // natural ground: soil / grass / dry grass. Patchy at large scale, clods and blades up close, no repeating texture
+    vec2 gp = vWorldMod.xz * uTexScale;
+    float n0 = vn2(gp*0.011), n1 = vn2(gp*0.07), n2 = vn2(gp*0.45), n3 = vn2(gp*2.4), n4 = vn2(gp*13.), n5 = vn2(vec2(gp.x*38., gp.y*5.));
+    float f1 = 1.-smoothstep(40.,260.,dist), f2 = 1.-smoothstep(6.,45.,dist), f3 = 1.-smoothstep(1.5,16.,dist);
+    float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3 + 0.12*(n5-.5)*f3;
+    albedo = uBase * vCol * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
+    rough = 0.97; metal = 0.; coat = 0.;
   } else if (uKind == 6) {
     // textured standard
     albedo = tx.rgb * uBase * vCol;
