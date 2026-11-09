@@ -153,6 +153,8 @@ void main(){
     albedo *= 1. + (fl-.25) * uFlake * 0.35 * (1.-smoothstep(3.,12.,dist));
   } else if (uKind == 2) {
     albedo = uBase; alpha = uAlpha;
+  } else if (uKind == 8) {
+    albedo = vCol;
   } else if (uKind == 3) {
     albedo = vec3(0.); emis = uEmis * vCol;
   } else if (uKind == 5) {
@@ -175,6 +177,18 @@ void main(){
     else if (cell.x == 3. && cell.y == 3.) { metal = 0.9; rough = 0.25; }
     else if (cell.x == 0. && cell.y == 3.) { metal = 0.0; rough = 0.16; coat = 0.0; }
     else if (cell.x == 2. && cell.y == 3.) { rough = 0.45; }
+    else {
+      // paint / plaster / brick / concrete: real surface character. Roller-coat grain and roughcast bumps close up, soft blotches and long vertical
+      // weathering streaks at mid range, so a wall never looks like a flat colour fill.
+      vec3 wp = vWorldMod;
+      vec2 sp = abs(vNrm.y) > 0.7 ? wp.xz : vec2(wp.x * abs(vNrm.z) + wp.z * abs(vNrm.x), wp.y);
+      float nr = 1. - smoothstep(4., 28., dist), md = 1. - smoothstep(25., 130., dist);
+      float g1 = vn2(sp * 46.), g2 = vn2(sp * 9.), g3 = vn2(vec2(sp.x * 1.6, sp.y * 0.2));
+      albedo *= 1. + 0.02 * (g1 - .5) * nr + 0.06 * (g2 - .5) * md - 0.12 * (g3 - .45) * md;
+      vec3 tN = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
+      float e = 0.0035, hx = vn2((sp + vec2(e, 0.)) * 46.), hy = vn2((sp + vec2(0., e)) * 46.);
+      N = normalize(N + (tN * (g1 - hx) + vec3(0., 1., 0.) * (g1 - hy)) * 0.45 * nr);
+    }
   }
 
   float NdV = max(dot(N, Vv), 1e-3);
@@ -249,6 +263,38 @@ void main(){
     outCol = vec4(finish(c), al);
     // premultiplied: color already mixes; scale by alpha
     outCol.rgb *= 1.0;
+    return;
+  }
+
+  if (uKind == 8) {
+    // window glass: clear and lightly tinted, only a faint sky reflection (more at grazing angles), a small sun glint. The room behind shows through.
+    float cf = pow(1. - NdV, 4.);
+    float al = clamp(uAlpha + cf * 0.35, 0., 0.8);
+    vec3 tintLit = albedo * 0.55 * (amb * 0.9 + uSunCol * sunVis * 0.06);
+    vec3 tintD = pow(aces(tintLit * 0.62), vec3(1. / 2.2));
+    vec3 skyD = pow(aces(skyEnv(R, 0.2) * 0.62), vec3(1. / 2.2));
+    vec3 reflD = skyD * (0.045 + 0.40 * cf);
+    float glint = ggxD(NdH, 0.05) * smithV(max(NdL,1e-3), NdV, 0.05) * 0.04 * NdL * sh;
+    // evenings: some windows glow warm from inside
+    float lit = step(0.62, h21(floor(vWorldMod.xz * 0.35) + floor(vWorldMod.y / 3.2) * 7.3));
+    vec3 glow = vec3(1.0, 0.78, 0.5) * lit * uNight * 0.55;
+    // curtain-wall / ribbon glazing (the heavier 'glass' tint): slim dark aluminium mullions every 1.5 m so a long band reads as real glazing, not one slab
+    if (uAlpha > 0.4) {
+      vec3 wq = vWorldMod; float tq = wq.x * abs(vNrm.z) + wq.z * abs(vNrm.x);
+      float mq = 1. - smoothstep(0.02, 0.05, abs(fract(tq / 1.5 + 0.5) - 0.5) * 1.5);
+      reflD *= 0.75 + 0.5 * fract(wq.y / 3.2);
+      vec3 c0 = tintD * al + reflD + glint * uSunCol * 3. + glow * al;
+      c0 = mix(c0, vec3(0.06, 0.065, 0.07), mq * 0.92); al = mix(al, 0.97, mq);
+      vec3 c = c0;
+      float dd2 = 1. - exp(-dist * uFogD);
+      c = c * (1. - dd2) + pow(aces(uFogCol * 0.62), vec3(1. / 2.2)) * dd2 * al;
+      outCol = vec4(c, al);
+    } else {
+    vec3 c = tintD * al + reflD + glint * uSunCol * 3. + glow * al;
+    float dd = 1. - exp(-dist * uFogD);                       // distant glass fades into the haze together with the wall around it
+    c = c * (1. - dd) + pow(aces(uFogCol * 0.62), vec3(1. / 2.2)) * dd * al;
+    outCol = vec4(c, al);
+    }
     return;
   }
 

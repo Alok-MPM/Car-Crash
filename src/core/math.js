@@ -235,3 +235,14 @@ export function lin(pts) {
     return pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t;
   };
 }
+
+// Does the segment (ax,az)->(bx,bz), grown by g metres, touch the axis-aligned rectangle x0..x1 / z0..z1?  (swept-path test used by the 10 m physics bubble and the city streamer)
+export function segHitsRect(ax, az, bx, bz, x0, z0, x1, z1, g) {
+  let t0 = 0, t1 = 1;
+  const slab = (o, d, lo, hi) => {
+    if (Math.abs(d) < 1e-9) return o >= lo && o <= hi;
+    let a = (lo - o) / d, b = (hi - o) / d; if (a > b) { const t = a; a = b; b = t; }
+    if (a > t0) t0 = a; if (b < t1) t1 = b; return t0 <= t1;
+  };
+  return slab(ax, bx - ax, x0 - g, x1 + g) && slab(az, bz - az, z0 - g, z1 + g);
+}

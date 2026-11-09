@@ -121,6 +121,7 @@ function blast(pos, R = 11, power = 10) {
   fx.explosion(pos); sfx.boom(pos);
   if (scene.land && scene.land.roadHole && pos[1] < 4) scene.land.roadHole(pos[0], pos[2], Math.max(0.9, R * 0.2));
   lastBlast = { pos: pos.slice(), t: 0 };
+  scene.wakeAround(pos[0], pos[2], R + 4);                                    // an explosion reaches buildings and props that were asleep
   shake = Math.max(shake, clamp(1.2 - dist(pos, camPos) / 40, 0.1, 1.2));
   for (const o of world.bodies) {
     if (o.fixed) continue;
@@ -724,12 +725,42 @@ function updateLiftCard(u) {
   for (const b of bs) { const i = +b.dataset.i; const on = i === (u.moving ? u.dest : u.cur); b.style.background = on ? '#f5b81c' : '#1d232c'; b.style.color = on ? '#14110a' : '#e8edf3'; b.style.opacity = u.moving && i !== u.dest ? '.5' : '1'; }
   const st = liftEl.querySelector('#liftSt'); if (st) st.textContent = u.moving ? 'Going to ' + u.labels[u.dest] : 'Floor ' + u.labels[u.cur];
 }
-function watchBuildings() {
-  const pts = [];
-  for (const c of cars) { const b = c.vehicle ? c.vehicle.body : null; if (!b) continue; const sp = Math.hypot(b.v[0], b.v[2]); if (c !== player && sp < 1 && !c.vehicle.hyperOn) { pts.push({ x: b.pos[0], z: b.pos[2], r: 6 }); continue; } pts.push({ x: b.pos[0], z: b.pos[2], r: 14 + sp * 1.4 }); }
-  if (person.active) pts.push({ x: person.body.pos[0], z: person.body.pos[2], r: 10 });
+// ---------- the 10 m physics bubble ----------
+// Only things a "watcher" can reach in the next instant are in the physics world: a car is a swept path (where it is -> 10 m ahead along its velocity, 4 m wide),
+// a walking person is a 10 m circle, and anything already moving fast (flying debris, a shoved prop) wakes what lies in its way. Buildings and loose props
+// outside every watcher are only pictures + a few numbers. Waking is done before each physics step, so there is no delay and nothing to bounce off.
+let debrisPts = [];
+function scanMovers() {
+  // fast loose bodies (not cars / person: those are watchers already) keep the things in their path awake
+  debrisPts = [];
+  for (const b of world.bodies) {
+    if (b.fixed || b.sleeping || b.removed || b.person || (b.userData && b.userData.vehicle)) continue;
+    const sp2 = b.v[0] * b.v[0] + b.v[2] * b.v[2];
+    if (sp2 < 4 || b.pos[1] < -5) continue;
+    const k = Math.max(3, Math.sqrt(sp2) * 0.35) / Math.sqrt(sp2);
+    debrisPts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + b.v[0] * k, z2: b.pos[2] + b.v[2] * k, r: 1.5 });
+    if (debrisPts.length >= 160) break;
+  }
+}
+function wakeWatchers() {
+  const pts = debrisPts.slice(), foci = [];
+  for (const c of cars) {
+    const b = c.vehicle ? c.vehicle.body : null; if (!b) continue;
+    const vx = b.v[0], vz = b.v[2], sp = Math.hypot(vx, vz);
+    if (c !== player && sp < 1 && !c.vehicle.hyperOn) continue;                       // parked traffic stays quiet
+    const k = sp > 1.5 ? 10 / sp : 0;                                                  // 10 m ahead
+    pts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + vx * k, z2: b.pos[2] + vz * k, r: 4 });
+    if (c === player) foci.push({ x: b.pos[0], z: b.pos[2], vx, vz });
+  }
+  if (person.active) { const q = person.body.pos; pts.push({ x: q[0], z: q[2], x2: q[0], z2: q[2], r: 10 }); foci.push({ x: q[0], z: q[2], vx: person.body.v[0], vz: person.body.v[2] }); }
   scene.structures.updateDormancy(pts);
-  if (scene.city) { const q = pts.slice(); if (player && player.vehicle) q.push({ x: player.vehicle.body.pos[0], z: player.vehicle.body.pos[2] }); scene.city.update(1 / 60, q); }
+  scene.watchProps(pts);
+  return foci;
+}
+function watchBuildings() {
+  scanMovers();
+  const foci = wakeWatchers();
+  if (scene.city) { if (!foci.length && player && player.vehicle) foci.push({ x: player.vehicle.body.pos[0], z: player.vehicle.body.pos[2], vx: 0, vz: 0 }); scene.city.update(1 / 60, foci); }
 }
 function stepPhysics(real) {
   const ts = paused ? 0 : userSlow ? 0.25 : slowT > 0 ? 0.3 : 1;
@@ -738,6 +769,7 @@ function stepPhysics(real) {
   let n = 0;
   while (acc >= H && n < 4) {
     const a0 = performance.now();
+    if (n > 0) wakeWatchers();                                                          // the first step was prepared at frame start; later steps re-check (a car moves up to 11 m per frame at 600 km/h)
     for (const c of cars) { c.vehicle.step(H); if (c.vehicle.hyperOn || c.vehicle.speed > 110) c.vehicle.ccdBegin(H); }
     const a1 = performance.now();
     world.step(H);
@@ -881,7 +913,7 @@ async function boot() {
   makePlayer(false);
   populateNPCs();
   for (const c of cars) if (c.npc) { c.body.canSleep = true; c.body.sleep(); }
-  for (const b of world.bodies) if (!b.fixed && b.group === 2 && b.mass <= 60 && !b.sleeping && !(b.userData && b.userData.vehicle)) b.sleep();
+  for (const b of world.bodies) if (!b.fixed && b.group === 2 && !b.sleeping && !(b.userData && b.userData.vehicle) && !b.person) b.sleep();   // every resting prop starts asleep, so the 10 m bubble can shelve it
   scene.structures.sleepAll(); watchBuildings();
   syncMenu();
   $('loading').style.display = 'none';

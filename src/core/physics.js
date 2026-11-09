@@ -419,7 +419,7 @@ export class World {
     this.time = 0;
   }
   add(b) {
-    b.finalize();
+    b.finalize(); b._fin = true; b.removed = false;
     this.bodies.push(b);
     if (b.fixed) this.staticDirty = true;
     if (b.fixed && b.raycast) this.statics.push(b);
@@ -432,6 +432,17 @@ export class World {
     if (i >= 0) this.bodies.splice(i, 1);
     const j = this.statics.indexOf(b);
     if (j >= 0) this.statics.splice(j, 1);
+  }
+  // batch versions: one pass over the body list instead of one search per body (a building has ~1000 panels)
+  addMany(list) {
+    for (const b of list) { b.removed = false; if (!b._fin) { b.finalize(); b._fin = true; } this.bodies.push(b); if (b.fixed) { this.staticDirty = true; if (b.raycast) this.statics.push(b); } }
+  }
+  removeMany(list) {
+    if (!list.length) return;
+    const set = new Set(list);
+    for (const b of list) { b.removed = true; if (b.fixed) this.staticDirty = true; }
+    this.bodies = this.bodies.filter((b) => !set.has(b));
+    if (this.statics.length) this.statics = this.statics.filter((b) => !set.has(b));
   }
 
   // highest surface straight below (x, y0, z): ground, fixed pieces, rubble, furniture, cars. Used by the walking person to climb over things.

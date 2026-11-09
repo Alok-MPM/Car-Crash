@@ -135,8 +135,9 @@ export class Scene {
     const { r, world } = this;
     // ground
     // the world itself is natural ground (soil / dry grass, procedural); tarmac exists only where it was built (proving ground + roads)
-    this.ground = r.createMesh(plane(24000, 24000, 1, 1), { mat: { kind: 7, base: [0.2, 0.2, 0.085], texScale: 1 } });
-    this.tarmac = [[0, -3000, 52, 6260], [0, -300, 360, 820]].map(([x, z, w, d]) => ({ m: r.createMesh(plane(w, d, 1, 1), { mat: { kind: 4, base: [1, 1, 1], texScale: 1, poly: 1 } }), model: m4.fromTRS(new Float32Array(16), [x === 0 && w === 360 ? 5 : x, 0.003, z], [0, 0, 0, 1], 1) }));
+    // the ground is cut into 250 m cells: two 24 km triangles give the rasteriser a depth plane that is only good to a few cm, and the thin road/lawn layers 5 mm above it then lose the depth test (tan 'dry' ground showing through the lawns). Pushed back a hair so every layer on top always wins.
+    this.ground = r.createMesh(plane(24000, 24000, 1, 1, 96, 96), { mat: { kind: 7, base: [0.2, 0.2, 0.085], texScale: 1, poly: -1 } });
+    this.tarmac = [[0, -3000, 52, 6260], [0, -300, 360, 820]].map(([x, z, w, d]) => ({ m: r.createMesh(plane(w, d, 1, 1, Math.max(1, Math.round(w / 120)), Math.max(1, Math.round(d / 120))), { mat: { kind: 4, base: [1, 1, 1], texScale: 1, poly: 1 } }), model: m4.fromTRS(new Float32Array(16), [x === 0 && w === 360 ? 5 : x, 0.003, z], [0, 0, 0, 1], 1) }));
     // markings: one merged mesh (white / yellow)
     const white = new Builder([0, 0, 0]), yellow = new Builder([0, 0, 0]);
     const quad = (b, x0, z0, x1, z1) => {
@@ -341,6 +342,37 @@ export class Scene {
     this.ramps = this.ramps.filter((rp) => { if (inCol(rp.body.pos[0], rp.body.pos[2])) { this.world.remove(rp.body); return false; } return true; });
   }
 
+  // ---------- 10 m physics bubble for loose props ----------
+  // props that lie still and are far from every watcher leave the physics world (they stay drawn); they come back when a watcher's path reaches them
+  watchProps(pts) {
+    const add = [], rem = [];
+    for (const p of this.props) {
+      if (p.dead) continue;
+      const b = p.body, x = b.pos[0], z = b.pos[2];
+      let near = false, far = true;
+      for (const q of pts) {
+        const lim = q.r + p.radius, dx = q.x2 - q.x, dz = q.z2 - q.z, l2 = dx * dx + dz * dz;
+        let t = l2 > 1e-6 ? ((x - q.x) * dx + (z - q.z) * dz) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = x - (q.x + dx * t), ez = z - (q.z + dz * t), d2 = ex * ex + ez * ez;
+        if (d2 < lim * lim) { near = true; break; }
+        if (far && d2 < (lim + 22) * (lim + 22)) far = false;
+      }
+      if (p.shelved) { if (near) { add.push(b); p.shelved = false; p.far = 0; } }
+      else if (b.sleeping && !b.fixed) { if (far) { if ((p.far = (p.far || 0) + 1) > 24) { rem.push(b); p.shelved = true; p.far = 0; } } else p.far = 0; }
+      else p.far = 0;
+    }
+    if (add.length) this.world.addMany(add);
+    if (rem.length) this.world.removeMany(rem);
+  }
+  // wake every building and prop within R metres of a point (explosions, scripted impacts)
+  wakeAround(x, z, R) {
+    const q = { x, z, x2: x, z2: z, r: R };
+    for (const B of this.structures.list) if (B.dormant && B.fp && Structures.reach(B, q, 0)) this.structures.wakeBuilding(B);
+    const add = [];
+    for (const p of this.props) if (p.shelved && !p.dead && Math.hypot(p.body.pos[0] - x, p.body.pos[2] - z) < R + p.radius) { add.push(p.body); p.shelved = false; }
+    if (add.length) this.world.addMany(add);
+  }
+
   update(dt) {
     this.structures.update(dt);
     // remove props that fell absurdly far
@@ -362,6 +394,7 @@ export class Scene {
     const cx = cam[0], cz = cam[2];
     for (const b of this.boards) if (Math.abs(b.model[14] - cz) < 900) r.add(b.m, b.model, { cast: false });
     this.structures.draw(cam);
+    if (this.city) this.city.draw(cam);
     for (const rp of this.ramps) r.add(rp.mesh, this._rampModel(rp));
     for (const p of this.props) {
       if (p.dead) continue;

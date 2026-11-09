@@ -4,7 +4,9 @@ import { ROADS, GROUND, CROPS, TREES, TREE_SETS, PARKING, LAYERS, ROAD_LAYERS, A
 import { RECIPES } from '../../data/recipes.js';
 import { Builder, M } from '../cars/carmodel.js';
 import { rbox, cylinder } from '../../core/geo.js';
-import { mulberry32 } from '../../core/math.js';
+import { mulberry32, m4, segHitsRect } from '../../core/math.js';
+import { GeoBuf, T, hexRGB } from '../buildings/render.js';
+import { PALETTES } from '../buildings/catalog.js';
 
 const H = 0.012;   // base height of flat land layers above the tarmac plane (avoids z-fight, cars drive over them)
 const hash = (a, b, c = 0) => (Math.imul(a | 0, 73856093) ^ Math.imul(b | 0, 19349663) ^ Math.imul(c | 0, 83492791)) >>> 0;
@@ -42,8 +44,8 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
   const nsRoads = roads.filter((q) => q.axis === 'z' && q.a0 < cz + ext);
   const queue = ['podHouse', 'louvreHouse', 'woodHouse', 'villa', 'house', 'shop', 'houseSmall', 'market', 'tower'];   // the designed showcase buildings take real lots on the road structure
   for (const er of ewRoads) {
-    const zr = er.c, rw = er.w, core = Math.hypot(0, zr - cz) < pitch * 1.3 && er.type !== 'city' || er.type === 'bazaar';
-    const setback = er.type === 'bazaar' ? 1.2 : er.type === 'gali' ? 1.6 : 4.5, zFront = zr - rw / 2 - setback - (er.type === 'bazaar' ? 2 : 0);
+    const zr = er.c, rw = er.w, fpw = ROADS[er.type].footpath || 0;
+    const baseSet = er.type === 'bazaar' ? 1.2 : er.type === 'gali' ? 1.6 : 0;
     const cuts = nsRoads.filter((q) => zr > q.a0 - 2 && zr < q.a1 + 2).map((q) => [q.c - q.w / 2 - 1, q.c + q.w / 2 + 1]).sort((a1, b1) => a1[0] - b1[0]);
     let x = cx - ext + 3;
     const xEndAll = cx + ext - 3;
@@ -65,16 +67,39 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
       }
       let showName = null;
       if (!old && er.type === 'city' && queue.length && rnd() < 0.5) { showName = queue[0]; brief = { ...RECIPES[showName].brief }; }
-      const wantPad = !old && er.type === 'city';
-      const padW = wantPad ? (brief.kind === 'tower' ? 6.4 : 3.4) : 0, gap = old ? 0.45 : 1.6;
-      const lotW = brief.w + padW + gap;
+      // ---- plot rules (engine): colonies get real plots - road setback 6-9 m, 6-10 m between houses, 16-24 m round towers / big villas / markets,
+      //      a front lawn, a driveway to a parking pad, a back garden and trees round the plot. The old core stays tight (shops share walls, galis are narrow).
+      const colony = !old && er.type === 'city';
+      const big = brief.kind === 'tower' || showName === 'villa' || showName === 'market' || showName === 'tower' || (brief.w || 0) >= 15;
+      const setback = colony ? (big ? 8 + rnd() * 2 : 6 + rnd() * 3) : baseSet;
+      const zFront = zr - rw / 2 - fpw - setback - (er.type === 'bazaar' ? 2 : 0);
+      const wantPad = colony;
+      const padW = wantPad ? (brief.kind === 'tower' ? 8.6 : big ? 5.8 : brief.garage ? 5.8 : 3.4) : 0;
+      const gap = colony ? (big ? 16 + rnd() * 8 : 6 + rnd() * 4) : old ? 0.45 + rnd() * 0.9 : 1.6;
+      const bw = brief.w || 12, bd = brief.d || 10;
+      const lotW = bw + padW + gap;
       if (x + lotW > xEnd) { x = (nextCut ? nextCut[1] : xEndAll) + 0.5; continue; }
-      const padLeft = rnd() < 0.5, bx = x + (padLeft && padW ? padW + 0.8 : 0) + brief.w / 2;
+      const padLeft = rnd() < 0.5, bx = x + gap / 2 + (padLeft && padW ? padW + 0.8 : 0) + bw / 2;
       if (!showName) brief.seed = hash(Math.round(bx), Math.round(zFront), seed) % 100000 + 1;
       if (showName) queue.shift();
-      lots.push({ id: lots.length, x: bx, z: zFront - brief.d / 2, zFront, w: brief.w, d: brief.d, brief, B: null, show: showName, roadC: zr });
-      if (padW) { const px0 = padLeft ? x : bx + brief.w / 2 + 0.8; pads.push({ x0: px0, x1: px0 + padW, z0: zFront - 6.2, z1: zFront, apron: [px0 + 0.3, zFront, px0 + padW - 0.3, zr - rw / 2], bays: Math.max(1, Math.round(padW / PARKING.bayW)) }); }
-      if (!old) lawns.push({ x0: bx - brief.w / 2 - 0.4, x1: bx + brief.w / 2 + 0.4, z0: zFront, z1: zr - rw / 2 - 0.3 });
+      const lot = { id: lots.length, x: bx, z: zFront - bd / 2, zFront, w: bw, d: bd, brief, B: null, show: showName, roadC: zr, colony, big, x0: x, x1: x + lotW, fpEdge: zr - rw / 2 - fpw, pathW: brief.kind === 'tower' ? 3 : big ? 2.2 : 1.5 };
+      lots.push(lot);
+      let padR = null;
+      if (padW) {
+        const px0 = padLeft ? x + gap / 2 : bx + bw / 2 + 0.8; padR = [px0, px0 + padW];
+        const rows = brief.kind === 'tower' ? 2 : 1;
+        pads.push({ x0: px0, x1: px0 + padW, z0: zFront - 5.4 * rows - 0.8, z1: zFront, apron: [px0 + 0.3, zFront, px0 + padW - 0.3, zr - rw / 2 - fpw], bays: Math.max(1, Math.round(padW / PARKING.bayW)), rows });
+      }
+      if (colony) {
+        lawns.push({ x0: x + 0.4, x1: x + lotW - 0.4, z0: zFront - bd - 5, z1: zr - rw / 2 - fpw - 0.3 });
+        // trees round the plot: big crowns on the front lawn (clear of the façade, the path and the driveway), narrow ones in the side gaps, shrubs at the façade
+        const free = (tx) => !(padR && tx > padR[0] - 1.4 && tx < padR[1] + 1.4) && Math.abs(tx - bx) > 2.4;
+        const nFront = big ? 4 + Math.floor(rnd() * 3) : 2 + Math.floor(rnd() * 2);
+        for (let t = 0, g = 0; t < nFront && g < 40; g++) { const tx = x + 1.5 + rnd() * (lotW - 3), tz = zFront + 4.5 + rnd() * Math.max(1, zr - rw / 2 - fpw - zFront - 6.5); if (!free(tx)) continue; trees.push({ x: tx, z: tz, set: big ? 'frontBig' : 'front', s: rnd(), s2: rnd(), s3: rnd() }); t++; }
+        for (let t = 0; t < (big ? 4 : 2); t++) trees.push({ x: x + (t % 2 ? lotW - gap / 4 : gap / 4), z: zFront - bd * (0.1 + rnd() * 0.8), set: 'side', s: rnd(), s2: rnd(), s3: rnd() });
+        for (let t = 0; t < (big ? 3 : 2); t++) trees.push({ x: x + 2 + rnd() * (lotW - 4), z: zFront - bd - 1.5 - rnd() * 3, set: big ? 'frontBig' : 'front', s: rnd(), s2: rnd(), s3: rnd() });   // back garden
+        for (const sx of [-1, 1]) for (let t = 0; t < (big ? 3 : 1); t++) { const tx = bx + sx * (bw / 2 - 0.6 - t * (bw / 4)); if (free(tx) || Math.abs(tx - bx) > 3) trees.push({ x: tx, z: zFront + 0.9, set: 'shrub', s: rnd(), s2: rnd(), s3: rnd() }); }
+      }
       x += lotW;
     }
   }
@@ -84,8 +109,23 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
   { const row = (zz, n, x0) => { for (let i = 0; i < n; i++) { const w = 7 + Math.floor(rnd() * 3), d = 7 + Math.floor(rnd() * 2); lots.push({ id: lots.length, x: x0 + i * 11, z: zz - d / 2, zFront: zz, w, d, brief: { kind: 'house', w, d, floors: 1 + Math.floor(rnd() * 2), style: rnd() < 0.7 ? 'classic' : 'brick', seed: hash(i, zz, seed) % 100000 + 1 }, B: null }); } };
     row(vz - 4.5, 7, vx - 38); ponds.push({ x: vx, z: vz + 36, rx: 22, rz: 14 });
     for (let t = 0; t < 22; t++) { const a = (t / 22) * Math.PI * 2; trees.push({ x: vx + Math.cos(a) * 26, z: vz + 36 + Math.sin(a) * 18, set: 'village', s: rnd(), s2: rnd(), s3: rnd() }); } }
-  // town pond in one block of the old city
-  ponds.push({ x: cx - pitch * 0.8, z: cz - pitch * 0.9, rx: 20, rz: 13 });
+  // town pond: the free spot nearest to the old-city corner that touches no road, no lot (house, lawn, parking, trees) and not the chowk
+  {
+    const rx = 20, rz = 13, m = 5, want = [cx - pitch * 0.8, cz - pitch * 0.9];
+    const lotRect = (l) => l.x0 !== undefined ? [l.x0, l.zFront - l.d - 7, l.x1, l.roadC + 6] : [l.x - l.w / 2 - 4, l.zFront - l.d - 4, l.x + l.w / 2 + 4, l.zFront + 4];
+    const hits = (px, pz) => {
+      const a0 = px - rx - m, a1 = px + rx + m, b0 = pz - rz - m, b1 = pz + rz + m;
+      for (const r of roads) { const h = r.w / 2; if (r.axis === 'x' ? (b1 > r.c - h && b0 < r.c + h && a1 > r.a0 && a0 < r.a1) : (a1 > r.c - h && a0 < r.c + h && b1 > r.a0 && b0 < r.a1)) return true; }
+      for (const l of lots) { const [x0, z0, x1, z1] = lotRect(l); if (a1 > x0 && a0 < x1 && b1 > z0 && b0 < z1) return true; }
+      for (const c of chowks) if (a1 > c.x0 && a0 < c.x1 && b1 > c.z0 && b0 < c.z1) return true;
+      return false;
+    };
+    let best = null, bd = 1e9;
+    for (let px = cx - ext + rx + m; px <= cx + ext - rx - m; px += 4) for (let pz = cz - ext + rz + m; pz <= cz + ext - rz - m; pz += 4) {
+      const d = Math.hypot(px - want[0], pz - want[1]); if (d < bd && !hits(px, pz)) { bd = d; best = [px, pz]; }
+    }
+    if (best) ponds.push({ x: best[0], z: best[1], rx, rz }); else console.warn('city: no free spot for the town pond');
+  }
 
   // ---- open land between roads: grass + trees (mostly in the planned colonies; the old core is built up)
   for (let i = 0; i < zs.length - 1; i++) for (let j = 0; j < xs.length - 1; j++) {
@@ -93,7 +133,7 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
     if (x1 - x0 < 12 || z1 - z0 < 30) continue;
     plots.push({ x0, x1, z0, z1, kind: 'grass' });
     const old = Math.hypot((x0 + x1) / 2 - cx, (z0 + z1) / 2 - cz) < pitch * 1.2, n = old ? 4 : 14 + Math.floor(rnd() * 10);
-    for (let t = 0; t < n; t++) { const x = x0 + 3 + rnd() * (x1 - x0 - 6), z = z0 + 3 + rnd() * (z1 - z0 - 26); trees.push({ x, z, set: 'park', s: rnd(), s2: rnd(), s3: rnd() }); }
+    for (let t = 0; t < n; t++) { const x = x0 + 3 + rnd() * (x1 - x0 - 6), z = z0 + 3 + rnd() * (z1 - z0 - 26); if (lots.some((l) => { const q = l.x0 !== undefined ? [l.x0, l.zFront - l.d - 7, l.x1, l.roadC + 6] : [l.x - l.w / 2 - 4, l.zFront - l.d - 4, l.x + l.w / 2 + 4, l.zFront + 4]; return x > q[0] && x < q[2] && z > q[1] && z < q[3]; })) continue; trees.push({ x, z, set: 'park', s: rnd(), s2: rnd(), s3: rnd() }); }
   }
   // street trees on the south side of each city road (opposite the lots)
   for (const r of roads) if ((r.type === 'city') && r.axis === 'x') for (let x = r.a0 + 14; x < r.a1 - 14; x += 17 + rnd() * 5) if (!onRoad(x, r.c + r.w / 2 + 2, 1, r)) trees.push({ x, z: r.c + r.w / 2 + 2.2, set: 'street', s: rnd(), s2: rnd(), s3: rnd() });
@@ -114,6 +154,7 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
     const a = rnd() * Math.PI * 2, rr = farmR * (0.8 + rnd() * 0.5), fx = cx + Math.cos(a) * rr, fz = cz + Math.sin(a) * rr, n = 50 + Math.floor(rnd() * 50);
     for (let t = 0; t < n; t++) { const x = fx + (rnd() - 0.5) * 120, z = fz + (rnd() - 0.5) * 120; if (!onRoad(x, z, 8)) trees.push({ x, z, set: 'forest', s: rnd(), s2: rnd(), s3: rnd() }); }
   }
+  for (let i = trees.length - 1; i >= 0; i--) { const t = trees[i]; if (ponds.some((p) => ((t.x - p.x) / (p.rx + 2)) ** 2 + ((t.z - p.z) / (p.rz + 2)) ** 2 < 1 && t.set !== 'village')) trees.splice(i, 1); }
   const roadAt = (x, z) => { let best = null; for (const r of roads) if (r.axis === 'x' ? Math.abs(z - r.c) < r.w / 2 && x > r.a0 && x < r.a1 : Math.abs(x - r.c) < r.w / 2 && z > r.a0 && z < r.a1) { if (!best || r.w > best.w) best = r; } return best ? best.type : null; };
   const paved = (x, z) => (Math.abs(x) < 26 && z < 100 && z > -6130) || (x > -175 && x < 185 && z > -700 && z < 110);
   return { seed, cx, cz, half, pitch, ext, roads, lots, pads, lawns, plots, fields, trees, chowks, ponds, onRoad, roadAt, paved, showcase: lots.filter((l) => l.show) };
@@ -233,8 +274,8 @@ export function buildLand(r, plan) {
   for (const p of plan.pads) {
     Q('lot', P.paver, p.x0, p.z0, p.x1, p.z1);
     const [ax0, az0, ax1, az1] = p.apron; Q('lot', P.paver, ax0, az0, ax1, az1);
-    const bw = (p.x1 - p.x0) / p.bays;
-    for (let b = 0; b <= p.bays; b++) Q('lot', P.white, p.x0 + b * bw - 0.05, p.z0 + 0.4, p.x0 + b * bw + 0.05, p.z1 - 0.8);
+    const bw = (p.x1 - p.x0) / p.bays, rowD = (p.z1 - p.z0) / (p.rows || 1);
+    for (let rw2 = 0; rw2 < (p.rows || 1); rw2++) for (let b = 0; b <= p.bays; b++) Q('lot', P.white, p.x0 + b * bw - 0.05, p.z0 + rw2 * rowD + 0.4, p.x0 + b * bw + 0.05, p.z0 + (rw2 + 1) * rowD - 0.8);
   }
   for (const l of plan.lawns) Q('lot', P.grass, l.x0, l.z0, l.x1, l.z1);
 
@@ -249,6 +290,7 @@ export function buildLand(r, plan) {
     let c = cell.get(key); if (!c) { c = { b: new Builder([0, 0, 0]), cx: (Math.floor(t.x / 240) + 0.5) * 240, cz: (Math.floor(t.z / 240) + 0.5) * 240 }; cell.set(key, c); }
     const h = sp.h[0] + t.s2 * (sp.h[1] - sp.h[0]), cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]), la = sp.leaf[t.s3 > 0.5 ? 1 : 0];
     const col = [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09];
+    if (sp.kind === 'palm') { c.b.addGeo(cylinder(sp.trunk * 0.7, sp.trunk, h * 0.9, 6), 'paint', P.trunk, M.tr(t.x, h * 0.45, t.z)); c.b.addGeo(rbox(cr, cr * 0.28, cr, cr * 0.3, 2), 'paint', P.leafA, M.tr(t.x, h * 0.92, t.z), col); continue; }
     c.b.addGeo(cylinder(sp.trunk * 0.7, sp.trunk, h * 0.55, 6), 'paint', P.trunk, M.tr(t.x, h * 0.275, t.z));
     if (sp.kind === 'broad') c.b.addGeo(rbox(cr, cr * 0.75, cr, cr * 0.8, 2), 'paint', P.leafA, M.tr(t.x, h * 0.55 + cr * 0.55, t.z), col);
     else for (let i = 0; i < 3; i++) c.b.addGeo(cylinder(0.05, cr * (1.15 - i * 0.28), h * 0.34, 7), 'paint', P.leafA, M.tr(t.x, h * (0.34 + i * 0.22) + h * 0.17, t.z), col);
@@ -275,18 +317,117 @@ export function buildLand(r, plan) {
 }
 
 // ---------------------------------------------------------------- streaming of buildings around the player
+// ---------------------------------------------------------------- streaming
+// Three tiers so the city is never empty, even at 600 km/h:
+//   1. PROXY  - every lot within ~800 m is drawn as a cheap shell (right size, colour, window bands) the moment it is in view. No physics, almost no cost.
+//   2. REAL   - lots near the player, and ahead along his path, are built for real, spread over several frames (a time budget per frame), nearest-to-reach first.
+//   3. NOW    - a lot that the car's path will reach within ~0.7 s is built immediately, so something solid is always there to be hit.
+const h32 = (n) => (((Math.imul((n | 0) + 1, 2654435761) >>> 0) ^ 0x9e3779b9) >>> 0) / 4294967296;
+const PATH_MATS = [{ kind: 7, base: GROUND.footpath.color, texScale: 4, poly: 3 }, { kind: 7, base: [0.2, 0.19, 0.18], texScale: 1, poly: 4 }];
+const lotSpec = (l) => (l.recipe ? { recipe: l.recipe, x: l.x, z: l.z } : { brief: { ...l.brief }, x: l.x, z: l.z });
 export class CityStreamer {
-  constructor(plan, structures) { this.plan = plan; this.S = structures; this.t = 0; this.inR = 230; this.outR = 420; this.built = 0; }
+  constructor(plan, structures) {
+    this.plan = plan; this.S = structures; this.r = structures.r;
+    this.inR = 170; this.outR = 330; this.proxyR = 800;
+    this.built = 0; this.job = null; this.tClean = 0; this.stats = { real: 0, proxy: 0, ms: 0 };
+    this._id = m4.fromTRS(new Float32Array(16), [0, 0, 0], [0, 0, 0, 1], 1);
+  }
   // build the nearest buildings right away (used when entering the city, shows as one short loading moment)
-  prime(pts, n = 10) { const lots = this.plan.lots.filter((l) => !l.B && !l.dead).map((l) => ({ l, d: Math.min(...pts.map((p) => Math.hypot(l.x - p.x, l.z - p.z))) })).sort((a, b) => a.d - b.d).slice(0, n); for (const { l, d } of lots) if (d < this.inR) { try { l.B = this.S.addBuilding(l.recipe ? { recipe: l.recipe, x: l.x, z: l.z } : { brief: { ...l.brief }, x: l.x, z: l.z }); } catch (e) { l.dead = true; } } }
-  update(dt, pts) {
-    this.t -= dt; if (this.t > 0) return; this.t = 0.4;
-    let made = 0;
-    for (const l of this.plan.lots) {
-      let dmin = 1e9; for (const p of pts) dmin = Math.min(dmin, Math.hypot(l.x - p.x, l.z - p.z));
-      if (!l.B && !l.dead && dmin < this.inR && made < 1) {
-        try { l.B = this.S.addBuilding(l.recipe ? { recipe: l.recipe, x: l.x, z: l.z } : { brief: { ...l.brief }, x: l.x, z: l.z }); this.built++; made++; } catch (e) { console.warn('lot failed', l.id, e.message); l.B = null; l.dead = true; }
-      } else if (l.B && dmin > this.outR && !(l.B.freed > 0)) { this.S.removeBuilding(l.B); l.B = null; this.built--; }
+  prime(pts, n = 10) {
+    const lots = this.plan.lots.filter((l) => !l.B && !l.dead && !(this.job && this.job.l === l)).map((l) => ({ l, d: Math.min(...pts.map((p) => Math.hypot(l.x - p.x, l.z - p.z))) })).sort((a, b) => a.d - b.d).slice(0, n);
+    for (const { l, d } of lots) if (d < this.inR) this.buildNow(l);
+  }
+  // the walking path from the pavement to the REAL front door (the door position comes out of the building compiler, so the path is made when the building is)
+  pathFor(l) {
+    if (!l.colony || !l.B || l.path) return;
+    const B = l.B; let door = null;
+    for (const D of B.doors || []) { if (D.roller || D.c0[1] > 2.2) continue; if (!door || D.c0[2] > door.c0[2]) door = D; }
+    const dx = door ? B.x + door.c0[0] : l.x, pw = l.pathW, z0 = l.zFront - 0.02, z1 = l.fpEdge - 0.02;
+    const b = new Builder([0, 0, 0]);
+    const slab = (part, xa, za, xb, zb, lift) => b.addGeo(rbox((xb - xa) / 2, 0.001, (zb - za) / 2, 0.0004, 1), 'paint', part, M.tr((xa + xb) / 2, 0.0051 + lift, (za + zb) / 2));
+    slab(0, dx - pw / 2, z0, dx + pw / 2, z1, 0);
+    slab(0, dx - pw / 2 - 0.7, z0, dx + pw / 2 + 0.7, z0 + 1.3, 0);
+    for (let z = z0 + 1.3 + 1.25; z < z1 - 0.3; z += 1.25) slab(1, dx - pw / 2, z, dx + pw / 2, z + 0.05, 0.0006);
+    const f = b.finish(); f.groups.forEach((g) => { g.mat = PATH_MATS[g.part]; });
+    l.path = this.r.createMesh(f.geo, { groups: f.groups, radius: 40 });
+  }
+  built1(l) { this.built++; this.pathFor(l); }
+  buildNow(l) {
+    if (l.B || l.dead) return;
+    try {
+      if (this.job && this.job.l === l) { l.B = this.S.runSteps(this.job.it); this.job = null; }
+      else l.B = this.S.addBuilding(lotSpec(l));
+      this.built1(l);
+    } catch (e) { console.warn('lot failed', l.id, e.message); l.B = null; l.dead = true; if (this.job && this.job.l === l) this.job = null; }
+  }
+  // distance from a lot to the player's path; lots ahead count as nearer (looking further the faster we go)
+  reachD(l, foci) {
+    let best = 1e9;
+    for (const q of foci) {
+      const sp = Math.hypot(q.vx, q.vz), dx = l.x - q.x, dz = l.z - q.z, d = Math.hypot(dx, dz);
+      const ahead = sp > 2 ? Math.max(0, (dx * q.vx + dz * q.vz) / (sp * (d || 1))) * Math.min(160, sp * 1.6) : 0;
+      best = Math.min(best, d - ahead);
     }
+    return best;
+  }
+  proxyFor(l) {
+    if (l.proxy !== undefined) return l.proxy;
+    const b = l.brief || {}, fl = b.floors || (l.recipe === 'mandir' ? 3 : 3), H = fl * (b.kind === 'tower' ? 3.4 : 3.2) + 0.4;
+    const list = PALETTES[b.style] || PALETTES.modern, pal = list[Math.floor(h32(b.seed || l.id) * list.length) % list.length];
+    const c = hexRGB(pal.out), gl = [0.07, 0.10, 0.12], off = [l.x, 0, l.z], w = l.w, d = l.d;
+    const g = new GeoBuf();
+    g.box(0, H / 2, 0, w / 2, H / 2, d / 2, () => [T.plaster, c[0], c[1], c[2]], off, 1, true);
+    g.box(0, H + 0.1, 0, w / 2 + 0.25, 0.12, d / 2 + 0.25, () => [T.roof, 1, 1, 1], off, 1, false);
+    for (let f = 0; f < fl; f++) {
+      const y = f * (b.kind === 'tower' ? 3.4 : 3.2) + 1.6;
+      g.box(0, y, d / 2 + 0.02, w / 2 - 0.8, 0.62, 0.03, (fi) => (fi === 4 ? [T.plaster, gl[0], gl[1], gl[2]] : null), off, 1, false);
+    }
+    l.proxy = this.r.createMesh(g.finish(), { mat: this.S.material(), radius: Math.hypot(w, d, H) / 2 + 2 });
+    l.pm = m4.fromTRS(new Float32Array(16), [l.x, 0, l.z], [0, 0, 0, 1], 1);
+    return l.proxy;
+  }
+  draw(cam) {
+    const r = this.r; let made = 0, n = 0;
+    for (const l of this.plan.lots) {
+      if (l.B || l.dead) continue;
+      const d = Math.hypot(l.x - cam[0], l.z - cam[2]);
+      if (d > this.proxyR) continue;
+      if (l.proxy === undefined) { if (made >= 3) continue; made++; }
+      r.add(this.proxyFor(l), l.pm, { cast: false }); n++;
+    }
+    for (const l of this.plan.lots) if (l.path) r.add(l.path, this._id, { cast: false });
+    this.stats.proxy = n;
+  }
+  update(dt, foci) {
+    const P = this.plan, S = this.S, t0 = performance.now();
+    if (!foci.length) return;
+    let spMax = 0; for (const q of foci) spMax = Math.max(spMax, Math.hypot(q.vx, q.vz));
+    // NOW: lots on a collision course are built immediately (the path of the next ~0.7 s, at least 40 m)
+    for (const q of foci) {
+      const sp = Math.hypot(q.vx, q.vz); if (sp < 3) continue;
+      const k = Math.max(40, sp * 0.7) / sp, x2 = q.x + q.vx * k, z2 = q.z + q.vz * k;
+      for (const l of P.lots) if (!l.B && !l.dead && segHitsRect(q.x, q.z, x2, z2, l.x - l.w / 2 - 2, l.z - l.d / 2 - 2, l.x + l.w / 2 + 2, l.z + l.d / 2 + 2, 3.5)) this.buildNow(l);
+    }
+    // REAL: nearest-to-reach first, inside a per-frame time budget (a building is spread over several frames)
+    const budget = spMax > 30 ? 9 : 5;
+    let guard = 0;
+    while (performance.now() - t0 < budget && guard++ < 60) {
+      if (!this.job) {
+        let best = null, bd = this.inR;
+        for (const l of P.lots) { if (l.B || l.dead) continue; const d = this.reachD(l, foci); if (d < bd) { bd = d; best = l; } }
+        if (!best) break;
+        this.job = { l: best, it: S.buildSteps(lotSpec(best)) };
+      }
+      let r;
+      try { r = this.job.it.next(); } catch (e) { console.warn('lot failed', this.job.l.id, e.message); this.job.l.dead = true; this.job = null; continue; }
+      if (r.done) { this.job.l.B = r.value; this.built1(this.job.l); this.job = null; }
+    }
+    // far, untouched buildings go back to being proxies (and give their memory back)
+    this.tClean -= dt;
+    if (this.tClean <= 0) {
+      this.tClean = 0.6;
+      for (const l of P.lots) if (l.B && !(l.B.freed > 0) && !l.B.free.size && this.reachD(l, foci) > this.outR) { S.removeBuilding(l.B); l.B = null; this.built--; if (l.path) { this.r.deleteMesh(l.path); l.path = null; } }
+    }
+    this.stats.ms = performance.now() - t0;
   }
 }

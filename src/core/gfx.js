@@ -277,7 +277,7 @@ export class Renderer {
         gl.uniformMatrix4fv(P.u.uModel, false, rel);
         gl.bindVertexArray(it.mesh.vao);
         for (const g of it.mesh.groups) {
-          if (g.mat && (g.mat.kind === 2 || g.mat.noShadow || g.hidden)) continue;
+          if (g.mat && (g.mat.kind === 2 || g.mat.kind === 8 || g.mat.noShadow || g.hidden)) continue;
           if (it.only !== undefined && g.part !== it.only) continue;
           if (it.hide && it.hide[g.part]) continue;
           gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, g.start * 4);
@@ -364,7 +364,7 @@ export class Renderer {
         if (it.only !== undefined && g.part !== it.only) continue;
         if (it.hide && it.hide[g.part]) continue;
         const mat = (it.over && it.over[gi]) || g.mat;
-        if (mat.kind === 2 || (mat.alpha !== undefined && mat.alpha < 1 && mat.kind !== 2)) {
+        if (mat.kind === 2 || mat.kind === 8 || (mat.alpha !== undefined && mat.alpha < 1 && mat.kind !== 2)) {
           trans.push({ it, g, mat, d: Math.hypot(it.model[12] - camPos[0], it.model[13] - camPos[1], it.model[14] - camPos[2]) });
           continue;
         }

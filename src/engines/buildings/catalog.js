@@ -64,3 +64,27 @@ export function windowType(style, roomType, wid, h, seed) {
   return wid > 1.1 ? 'grid' : 'picture';
 }
 function h38(seed, w) { return h32((seed || 1) * 31 + Math.round(w * 10)); }
+
+// DOORS - every door in the game is one of these archetypes; the engine picks one from the building style + seed (never the same flat brown slab twice in a row).
+// Dimensions are fractions of the leaf (w = width, h = height) so any door size works.
+export const DOOR_TYPES = {
+  pivotWood:  { leaf: 'wood',   grooves: 5, handle: 'slot',  slotColor: [0.03, 0.03, 0.035] },                            // tall wood slab, long black slot handle, fine grooves (modern wood house)
+  glassLite:  { leaf: 'paint',  lite: { w: 0.56, y0: -0.06, y1: 0.86 }, handle: 'bar' },                                // painted frame, tall glass light, metal bar
+  panelled:   { leaf: 'wood',   panels: [2, 3], handle: 'knob' },                                                       // raised panels, brass knob (classic / brick houses)
+  fluted:     { leaf: 'fluted', handle: 'slot', slotColor: [0.78, 0.6, 0.36] },                                          // dark fluted timber, brass slot (dark / modern)
+  shopfront:  { leaf: 'frame',  lite: { w: 0.8, y0: -0.9, y1: 0.9 }, handle: 'push' },                                  // aluminium frame, full glass, push bar (shops, towers)
+  roller:     { leaf: 'roller',  slats: 11 },                                                                            // garage roller shutter
+};
+const DOOR_FOR = {
+  modern:  ['pivotWood', 'glassLite', 'fluted', 'pivotWood'],
+  dark:    ['fluted', 'pivotWood', 'glassLite'],
+  classic: ['panelled', 'panelled', 'glassLite'],
+  brick:   ['panelled', 'fluted', 'panelled'],
+  glass:   ['shopfront'],
+};
+export function doorType(style, seed, flags = {}) {
+  if (flags.garage) return 'roller';
+  if (flags.shop) return 'shopfront';
+  const list = DOOR_FOR[style] || DOOR_FOR.modern;
+  return list[Math.floor(h32((seed || 1) * 13 + 5) * list.length) % list.length];
+}

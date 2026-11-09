@@ -4,7 +4,7 @@ const b0x = (P) => (P.body ? P.body.pos[0] : P.B.x + P.cx), b0z = (P) => (P.body
 import { compileDesign, STYLES } from './compile.js';
 import { generate } from './architect.js';
 import { Body, GROUP } from '../../core/physics.js';
-import { m4, clamp, qRot, qMul } from '../../core/math.js';
+import { m4, clamp, qRot, qMul, segHitsRect } from '../../core/math.js';
 import { MATERIALS, UNITS } from '../../data/materials.js';
 import { design, capacity } from './engineer.js';
 import { layout, mulberry } from './layout.js';
@@ -14,6 +14,7 @@ import { PAINTS } from '../../data/materials.js';
 import { GeoBuf, makeAtlas, T, hexRGB } from './render.js';
 import { RECIPES } from '../../data/recipes.js';
 import { LIFT_STYLES, buildCabinMesh, buildLeafMesh } from './lift.js';
+import { DOOR_TYPES, doorType } from './catalog.js';
 
 const PLASTER_T = 0.012;
 
@@ -41,16 +42,25 @@ export class Structures {
   }
 
   // ---------- construction ----------
-  addBuilding(o) {
+  // runs a step generator to the end (steps let the city streamer spread one building over several frames)
+  runSteps(it) { let r; do { r = it.next(); } while (!r.done); return r.value; }
+  addBuilding(o) { return this.runSteps(this.buildSteps(o)); }
+  // a body of a building: in the physics world right away, or kept out of it when the building is born asleep (lazy physics)
+  hold(b, B) { if (B.dormant) { b.finalize(); b._fin = true; b.removed = true; } else this.world.add(b); }
+  *buildSteps(o) {
     const spec = { ...(RECIPES[o.recipe] || {}), ...o };
     let C = null;
+    const cost = { t0: performance.now() };
     if (spec.brief && !spec.design) spec.design = generate(spec.brief);
+    cost.gen = performance.now();
     if (spec.design) {
       C = compileDesign(spec.design);
       spec.shapes = C.shapes; spec.w = C.bounds.x1 - C.bounds.x0; spec.d = C.bounds.z1 - C.bounds.z0; spec.floors = spec.design.floors.length;
       spec.system = (spec.design.mat || (C.style && C.style.mat)) === 'clay' && spec.floors <= 4 ? 'loadbearing' : 'frame';
       if (!spec.paint) spec.paint = (C.style && C.style.out) || undefined;
     }
+    cost.comp = performance.now();
+    yield 'design';
     const plan = design(spec);
     const seed = o.seed ?? (((o.x * 73856093) ^ (o.z * 19349663)) >>> 0);
     let lay;
@@ -81,15 +91,22 @@ export class Structures {
     B.radius = Math.hypot(plan.w, plan.d, plan.height || plan.floors * plan.storeyH) / 2 + 3;
     B.cy = (plan.height || plan.floors * plan.storeyH) / 2;
     B.indestr = !!spec.indestructible;
+    B.dormant = !!this.lazyOn && !B.indestr; B.lazy = B.dormant;     // born asleep: no body of this building touches the physics world until something reaches it
     const byId = new Map();
+    cost.lay = performance.now();
+    yield 'layout';
     for (const e of lay.el) byId.set(e.id, this.newPanel(B, e, plan));
+    cost.panels = performance.now();
+    yield 'panels';
     // links stored as panel refs
     for (const e of lay.el) {
       const P = byId.get(e.id);
       if (e.lat) P.lat = e.lat.map((i) => byId.get(i));
     }
     B.decos = decos.map((e) => ({ e, host: e.host != null ? byId.get(e.host) : null }));
-    this.finishBuilding(B);
+    B.cost = cost;
+    yield* this.finishSteps(B);
+    cost.end = performance.now();
     return B;
   }
 
@@ -124,48 +141,58 @@ export class Structures {
     if (e.ghost) P.anchored = true;
     b.addBox([e.hx, e.hy, e.hz]);
     b.brk = P; b.panel = P;
-    this.world.add(b);
+    this.hold(b, B);
     P.body = b;
     B.panels.push(P);
     return P;
   }
 
 
-  // ---- lazy physics: an untouched building is only a picture + a few numbers until a car / person gets close ----
+  // ---- lazy physics: an untouched building is only a picture + a few numbers until something is about to reach it ----
+  // Everything a building puts into the physics world while awake: wall/slab panels, loose furniture, lift shaft pieces.
+  bodiesOf(B, all) {
+    const list = [];
+    for (const P of B.panels) if (P.body && (all || P.state === 'fixed')) list.push(P.body);
+    for (const it of B.lay.furn) if (it.body) list.push(it.body);
+    for (const L of B.lifts || []) { for (const b of L.doorBodies) if (b) list.push(b); if (L.floorBody) list.push(L.floorBody); if (L.backBody) list.push(L.backBody); }
+    return list;
+  }
   sleepBuilding(B) {
     if (B.dormant || B.freed > 0 || B.removed) return;
-    for (const P of B.panels) if (P.body && P.state === 'fixed') this.world.remove(P.body);
+    for (const it of B.lay.furn) if (it.body && !it.body.sleeping) return;            // furniture still moving: stay awake
+    for (const L of B.lifts || []) if (L.state !== 'idle' || L.carry) return;           // a lift in motion: stay awake
+    this.world.removeMany(this.bodiesOf(B));
     B.dormant = true; B.lazy = true;
   }
   wakeBuilding(B) {
     if (!B.dormant) return;
-    for (const P of B.panels) if (P.body && P.state === 'fixed') { P.body.removed = false; this.world.add(P.body); }
-    B.dormant = false;
+    this.world.addMany(this.bodiesOf(B));
+    B.dormant = false; B.far = 0;
   }
   sleepAll() { this.lazyOn = true; for (const B of this.list) this.sleepBuilding(B); }
-  // pts: [{x,z,r}] watchers (cars with speed lookahead, the walking person). Nearest buildings wake first; far untouched ones go back to sleep.
+  // Does the swept corridor of a watcher (segment (x,z)->(x2,z2), radius r) touch the building footprint grown by m metres?
+  static reach(B, p, m) { const f = B.fp; return segHitsRect(p.x, p.z, p.x2, p.z2, f.x0, f.z0, f.x1, f.z1, p.r + m); }
+  // pts: watchers [{x,z,x2,z2,r}] = a car's path for the next fraction of a second, or a walking person (x2=x). A building is awake only while a watcher's path
+  // reaches it; waking happens in the same frame, before the physics step, so there is no delay and nothing to bounce off.
   updateDormancy(pts) {
     if (!this.lazyOn) return;
-    let budget = 2500;
-    const need = [];
+    const all = pts.slice();
+    for (const B of this.list) if (!B.removed && !B.dormant && (B.freed > 0 || B.free.size)) all.push({ x: B.x, z: B.z, x2: B.x, z2: B.z, r: B.radius + 4 });   // a collapsing building wakes its neighbours
     for (const B of this.list) {
-      if (B.removed || !B.lazy) continue;
-      let dm = 1e9;
-      for (const p of pts) { const d = Math.hypot(B.x - p.x, B.z - p.z) - B.radius - p.r; if (d < dm) dm = d; }
-      if (B.dormant) { if (dm < 0) need.push([dm, B]); }
-      else if (dm > 90 && B.freed === 0 && !B.free.size) B.far = (B.far || 0) + 1, B.far > 90 && this.sleepBuilding(B), B.far > 90 && (B.far = 0);
+      if (B.removed || !B.lazy || !B.fp) continue;
+      let near = false, far = true;
+      for (const p of all) { if (Structures.reach(B, p, 0)) { near = true; far = false; break; } if (far && Structures.reach(B, p, 22)) far = false; }
+      if (B.dormant) { if (near) this.wakeBuilding(B); }
+      else if (far && B.freed === 0 && !B.free.size) { B.far = (B.far || 0) + 1; if (B.far > 24) { this.sleepBuilding(B); B.far = 0; } }
       else B.far = 0;
-    }
-    need.sort((a, b) => a[0] - b[0]);
-    for (const [dm, B] of need) {
-      const n = B.panels.length;
-      if (dm > -6 && budget < n) break;      // not urgent: wait for next frame
-      this.wakeBuilding(B); budget -= n;
     }
   }
 
-  finishBuilding(B) {
-    const P = B.panels;
+  finishBuilding(B) { return this.runSteps(this.finishSteps(B)); }
+  *finishSteps(B) {
+    const P = B.panels, cs = B.cost || {};
+    cs.f0 = performance.now();
+    { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const p of P) { x0 = Math.min(x0, p.cx - p.ax); x1 = Math.max(x1, p.cx + p.ax); z0 = Math.min(z0, p.cz - p.az); z1 = Math.max(z1, p.cz + p.az); } B.fp = { x0: B.x + x0, x1: B.x + x1, z0: B.z + z0, z1: B.z + z1 }; }
     for (let i = 0; i < P.length; i++) for (let j = 0; j < P.length; j++) {
       if (i === j) continue;
       const A = P[i], C = P[j];
@@ -186,14 +213,19 @@ export class Structures {
     for (const it of B.lay.furn) if (it.solid) {
       const mass = Math.max(8, Math.min(450, 8 * it.hx * it.hy * it.hz * (it.act === 'stove' || it.act === 'fridge' ? 380 : 170)));
       const b = new Body({ mass, pos: [B.x + it.x, it.y + 0.005, B.z + it.z], q: [0, 0, 0, 1], group: GROUP.PROP, fric: 0.6, rest: 0.05, linDamp: 0.25, angDamp: 0.6 });
-      b.addBox([it.hx, it.hy, it.hz]); this.world.add(b); b.sleep(); b.furn = it; it.body = b;
+      b.addBox([it.hx, it.hy, it.hz]); this.hold(b, B); b.sleep(); b.furn = it; it.body = b;
     }
+    cs.f1 = performance.now();
+    yield 'links';
     this.setupDoors(B);
     this.setupLifts(B);
     this.list.push(B);
+    cs.f2 = performance.now();
     validateBuilding(this, B);
-    this.rebuild(B);
-    if (this.lazyOn && !B.indestr) this.sleepBuilding(B);
+    cs.f3 = performance.now();
+    yield 'valid';
+    yield* this.rebuildSteps(B);
+    cs.f4 = performance.now();
   }
 
   // ---------- surface description of a panel ----------
@@ -223,19 +255,23 @@ export class Structures {
       const roof = P.e.roof;
       return (fi) => (fi === 2 ? (roof ? [T.roof, 1, 1, 1] : [T.floor, 1, 1, 1]) : fi === 3 ? [pl, pIn[0], pIn[1], pIn[2]] : [T.rcc, 1, 1, 1]);
     }
-    if (P.kind === 'pane') { const fa = P.hx < P.hz ? [0, 1] : [4, 5]; return (fi) => (fa.includes(fi) ? [T.glass, ...(P.e.glassTint || [0.3, 0.4, 0.44])] : [T.metal, 0.3, 0.3, 0.33]); }
+    if (P.kind === 'pane') { const t = P.e.glassTint || [0.3, 0.4, 0.44]; return () => [T.glass, t[0], t[1], t[2]]; }
     if (P.kind === 'door') { const dc = P.e.doorTint ? hexRGB(P.e.doorTint).map((v) => Math.min(1, v * 1.5)) : [B.trim[0] * 2.2 + 0.25, B.trim[1] * 2.2 + 0.2, B.trim[2] * 2.2 + 0.15]; return (fi) => [T.wood, dc[0], dc[1], dc[2]]; }
     return () => [T.rcc, 1, 1, 1];
   }
 
   // ---------- mesh ----------
-  rebuild(B) {
-    const g = new GeoBuf();
+  rebuild(B) { this.runSteps(this.rebuildSteps(B)); }
+  *rebuildSteps(B) {
+    const g = new GeoBuf(), gl = new GeoBuf();           // gl: window glass, drawn in the transparent pass so the room behind it shows through
     const off = [B.x, 0, B.z];
+    let k = 0;
     for (const P of B.panels) if (P.state === 'fixed' && !P.e.ghost && !P.dyn) {
       const sh = 0.96 + 0.04 * ((P.e.id * 0.618) % 1);
-      if (P.q) g.boxQ(P.q, [P.cx, P.cy, P.cz], P.hx, P.hy, P.hz, this.faceCfg(P), off, (P.s0 + P.s1) / 2, sh);
-      else g.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, this.faceCfg(P), off, sh, true);
+      const pane = P.kind === 'pane', tg = pane ? gl : g;
+      if (P.q) tg.boxQ(P.q, [P.cx, P.cy, P.cz], P.hx, P.hy, P.hz, this.faceCfg(P), off, (P.s0 + P.s1) / 2, pane ? 1 : sh);
+      else tg.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, this.faceCfg(P), off, pane ? 1 : sh, !pane);
+      if ((++k & 255) === 0) yield 'mesh';
     }
     const trimC = B.trim;
     for (const D of B.decos || []) {
@@ -243,10 +279,21 @@ export class Structures {
       const e = D.e, c = e.tint ? hexRGB(e.tint) : trimC;
       g.boxQ(e.q, [e.cx, e.cy, e.cz], e.hx, e.hy, e.hz, () => [T.white, c[0], c[1], c[2]], off, 0, 1);
     }
-    const old = B.mesh;
-    B.mesh = g.n ? this.r.createMesh(g.finish(), { mat: this.material(), radius: B.radius }) : null;
+    const old = B.mesh, tg0 = performance.now();
+    const fin = g.n ? g.finish() : null, tg1 = performance.now();
+    B.mesh = fin ? this.r.createMesh(fin, { mat: this.material(), radius: B.radius }) : null;
+    if (B.cost) { B.cost.geo = tg1 - tg0; B.cost.up = performance.now() - tg1; }
     if (old) this.r.deleteMesh(old);
+    const oldG = B.glassMesh;
+    B.glassMesh = gl.n ? this.r.createMesh(gl.finish(), { mat: this.glassMat(B), radius: B.radius }) : null;
+    if (oldG) this.r.deleteMesh(oldG);
     B.dirty = false;
+  }
+  // glass: clear, slightly tinted, very little shine. 'glass' (tower) buildings are more tinted and a bit more reflective than houses.
+  glassMat(B) {
+    const a = (B.design && B.design.style === 'glass') ? 0.5 : 0.3;
+    this._gm = this._gm || {};
+    return this._gm[a] || (this._gm[a] = { kind: 8, base: [1, 1, 1], alpha: a, rough: 0.05, metal: 0 });
   }
 
   rebuildInterior(B) {
@@ -284,8 +331,39 @@ export class Structures {
     return m;
   }
 
+  // a real door: the leaf plus its design (grooves, raised panels, glass light, slats) and handle, built from the archetype the catalog picked for this building
+  doorGeo(P) {
+    const B = P.B, g = new GeoBuf(), hx = P.hx, hy = P.hy, hz = P.hz;
+    const D = B.design || {}, name = doorType(D.style, (D.seed || 1) + (P.e.id || 0), { garage: !!P.e.garage, shop: !!(D.shopGround && P.e.front) }), T0 = DOOR_TYPES[name];
+    const wood = P.e.doorTint ? hexRGB(P.e.doorTint) : [0.5, 0.36, 0.22], trim = B.trim, free = P.e.hinge === 'R' ? -1 : 1;
+    const box = (cx, cy, cz, ax, ay, az, tile, c) => g.box(cx, cy, cz, ax, ay, az, () => [tile, c[0], c[1], c[2]], [0, 0, 0], 1, false);
+    const lift = (v, k) => v.map((x) => Math.min(1, x * k));
+    const leafC = T0.leaf === 'wood' ? lift(wood, 1.5) : T0.leaf === 'fluted' ? [0.55, 0.55, 0.58] : T0.leaf === 'roller' ? [0.7, 0.72, 0.74] : T0.leaf === 'frame' ? [0.16, 0.17, 0.19] : lift(trim, 1.6);
+    const leafT = T0.leaf === 'wood' ? T.wood : T0.leaf === 'fluted' ? T.fluted : T0.leaf === 'roller' || T0.leaf === 'frame' ? T.metal : T.plaster;
+    box(0, 0, 0, hx, hy, hz, leafT, leafC);
+    const zf = hz + 0.004, dark = [0.05, 0.045, 0.04], glass = [0.05, 0.075, 0.09];
+    const faces = [1, -1];                                              // detail on the outside (+z) and the inside (-z)
+    for (const f of faces) {
+      if (T0.grooves) for (let i = 1; i <= T0.grooves; i++) box(0, -hy + (2 * hy * i) / (T0.grooves + 1), f * zf, hx - 0.01, 0.006, 0.004, T.plaster, dark);
+      if (T0.panels) { const [nc, nr] = T0.panels, pw = (2 * hx - 0.1) / nc, ph = (2 * hy - 0.1) / nr; for (let c = 0; c < nc; c++) for (let rr = 0; rr < nr; rr++) box(-hx + 0.05 + pw * (c + 0.5), -hy + 0.05 + ph * (rr + 0.5), f * (hz + 0.007), pw / 2 - 0.045, ph / 2 - 0.045, 0.007, T.wood, lift(wood, 1.2)); }
+      if (T0.lite) { const L = T0.lite, y0 = hy * L.y0, y1 = hy * L.y1, w = hx * L.w; box(0, (y0 + y1) / 2, f * (hz + 0.003), w, (y1 - y0) / 2, 0.003, T.plaster, glass); for (const sx of [-1, 1]) box(sx * (w + 0.012), (y0 + y1) / 2, f * zf, 0.012, (y1 - y0) / 2 + 0.012, 0.004, T.metal, dark); for (const yy of [y0 - 0.012, y1 + 0.012]) box(0, yy, f * zf, w + 0.024, 0.012, 0.004, T.metal, dark); }
+      if (T0.slats) for (let i = 1; i < T0.slats; i++) box(0, -hy + (2 * hy * i) / T0.slats, f * zf, hx - 0.005, 0.009, 0.004, T.plaster, [0.22, 0.23, 0.25]);
+      const hxp = free * (hx - 0.1);
+      if (T0.handle === 'slot') box(hxp, 0.0, f * (hz + 0.022), 0.014, hy * 0.42, 0.018, T.metal, T0.slotColor);
+      else if (T0.handle === 'bar') box(hxp, 0.0, f * (hz + 0.03), 0.012, 0.32, 0.012, T.metal, [0.7, 0.72, 0.74]);
+      else if (T0.handle === 'knob') { box(hxp, -0.02, f * (hz + 0.025), 0.035, 0.035, 0.02, T.brass, [1, 1, 1]); box(hxp, -0.2, f * (hz + 0.012), 0.025, 0.07, 0.008, T.brass, [1, 1, 1]); }
+      else if (T0.handle === 'push') box(0, 0, f * (hz + 0.04), hx * 0.7, 0.014, 0.014, T.metal, [0.8, 0.82, 0.84]);
+    }
+    return g;
+  }
   freeMesh(P) {
     const cracked = P.hp < P.maxHp * 0.55;
+    if (P.kind === 'door') {
+      const D = P.B.design || {}, key = ['door', D.style, D.seed, P.e.id, P.e.doorTint, P.e.hinge, P.e.garage ? 1 : 0, P.hx.toFixed(2), P.hy.toFixed(2), P.hz.toFixed(3), P.B.trim.join(',')].join('|');
+      let m = this.freeMeshes.get(key);
+      if (!m) { m = this.r.createMesh(this.doorGeo(P).finish(), { mat: this.material(), radius: Math.max(P.hx, P.hy, P.hz) * 2 }); this.freeMeshes.set(key, m); }
+      return m;
+    }
     const key = [P.B.lay.paint.out, P.kind, P.mat, P.hx.toFixed(2), P.hy.toFixed(2), P.hz.toFixed(2), P.out ? P.out.join('') : '', cracked, P.e.roof ? 1 : 0, P.e.parapet ? 1 : 0, P.e.tint || ''].join('|');
     let m = this.freeMeshes.get(key);
     if (!m) {
@@ -406,13 +484,14 @@ export class Structures {
 
   // take a building out of the world completely (used by the Design Lab when a design is rebuilt or deleted)
   removeBuilding(B) {
-    for (const P of B.panels) { if (P.body) this.world.remove(P.body); P.state = 'gone'; }
-    for (const it of B.lay.furn) if (it.body) { this.world.remove(it.body); it.body = null; }
-    for (const L of B.lifts || []) { for (const b of L.doorBodies) if (b) this.world.remove(b); if (L.floorBody) this.world.remove(L.floorBody); if (L.backBody) this.world.remove(L.backBody); }
+    this.world.removeMany(this.bodiesOf(B, true));
+    for (const P of B.panels) P.state = 'gone';
+    for (const it of B.lay.furn) it.body = null;
     B.free.clear();
     if (B.mesh) this.r.deleteMesh(B.mesh);
+    if (B.glassMesh) this.r.deleteMesh(B.glassMesh);
     if (B.intMesh) this.r.deleteMesh(B.intMesh);
-    B.mesh = B.intMesh = null; B.removed = true;
+    B.mesh = B.intMesh = B.glassMesh = null; B.removed = true;
     const i = this.list.indexOf(B); if (i >= 0) this.list.splice(i, 1);
   }
 
@@ -476,7 +555,9 @@ export class Structures {
   }
   liftBox(L, x, y, z, hx, hy, hz) {
     const B = L.B, b = new Body({ fixed: true, pos: [B.x + x, y, B.z + z], q: [0, 0, 0, 1], group: GROUP.STATIC, fric: 0.6, rest: 0.05 });
-    b.addBox([hx, hy, hz]); this.world.add(b); return b;
+    b.addBox([hx, hy, hz]);
+    this.hold(b, B);   // a sleeping building keeps its new shaft pieces out of the world until it wakes
+    return b;
   }
   // landing doors block the shaft whenever the cabin is not standing there with open doors; the cabin floor is a platform under the cabin
   syncLiftBodies(L) {
@@ -604,7 +685,7 @@ export class Structures {
     if (D.roller && D.open > 0.5) return;       // rolled up: nothing to collide with
     const b = new Body({ fixed: true, pos: [B.x + pose.pos[0], pose.pos[1], B.z + pose.pos[2]], q: pose.q.slice(), group: GROUP.STATIC, fric: 0.5, rest: 0.05 });
     b.addBox([P.hx, P.hy, P.hz]); b.brk = P; b.panel = P;
-    this.world.add(b); P.body = b; P.cx = pose.pos[0]; P.cz = pose.pos[2];
+    this.hold(b, B); P.body = b; P.cx = pose.pos[0]; P.cz = pose.pos[2];
   }
 
   // F at a door: open it, or close it again. Returns 'opened' | 'closed' | 'blocked' | false
@@ -888,6 +969,7 @@ export class Structures {
       const d = Math.hypot(dx, dz);
       if (d - B.radius > 900) continue;
       if (B.mesh) r.add(B.mesh, B.model, { cast: d - B.radius < 140 });
+      if (B.glassMesh && d - B.radius < 600) r.add(B.glassMesh, B.model, { cast: false });
       // interiors only exist as geometry when somebody can see them
       if (d - B.radius < 70 && B.lay.furn.length) {
         if (B.intDirty || !B.intMesh) this.rebuildInterior(B);
