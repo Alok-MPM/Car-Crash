@@ -161,6 +161,7 @@ export class Renderer {
       m.bufs[name] = b;
     };
     attr(0, geo.pos, 3, 'pos'); attr(1, geo.nrm, 3, 'nrm'); attr(2, geo.col, 3, 'col'); attr(3, geo.uv, 2, 'uv');
+    if (geo.tile) attr(4, geo.tile, 1, 'tile');   // atlas cell + 1 for meshes that repeat an atlas tile in the shader; absent -> attribute stays 0 = plain uv
     m.ibo = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.idx, gl.STATIC_DRAW);

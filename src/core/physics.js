@@ -551,6 +551,7 @@ export class World {
   step(dt) {
     const bodies = this.bodies, g = this.gravity;
     this.time += dt;
+    const guard = this._guard || (this._guard = []); guard.length = 0;
     // integrate velocities
     for (const b of bodies) {
       if (b.fixed || b.sleeping) { b.im = 0; continue; }
@@ -563,10 +564,21 @@ export class World {
       b.w[0] = (b.w[0] + (I[0] * tx + I[1] * ty + I[2] * tz) * dt) * ad;
       b.w[1] = (b.w[1] + (I[3] * tx + I[4] * ty + I[5] * tz) * dt) * ad;
       b.w[2] = (b.w[2] + (I[6] * tx + I[7] * ty + I[8] * tz) * dt) * ad;
+      if (b.group === GROUP.CAR) { b._vp = Math.hypot(b.v[0], b.v[1], b.v[2]); b._vyp = b.v[1]; b._wp = Math.hypot(b.w[0], b.w[1], b.w[2]); guard.push(b); }
     }
     this.collide();
     this.prepare(dt);
     for (let it = 0; it < this.iters; it++) this.iterate();
+    // A crash may take speed away from the car, never give it any: dozens of overlapping contacts (a wall full of freshly broken panels) used to add up to a
+    // 110 m/s kick that threw the car back and up. Out-speed of the hit is capped at 30 % of the speed it came in with (+3 m/s), and it cannot be launched upward or spun up wildly.
+    for (const b of guard) {
+      const vp = b._vp; if (vp < 12) continue;
+      const vl = Math.hypot(b.v[0], b.v[1], b.v[2]);
+      if (vl > vp * 1.08 + 2) { const k = (vp * 0.3 + 3) / vl; b.v[0] *= k; b.v[1] *= k; b.v[2] *= k; }
+      const vyMax = Math.max(b._vyp, 0) + 4; if (b.v[1] > vyMax) b.v[1] = vyMax;
+      const wl = Math.hypot(b.w[0], b.w[1], b.w[2]), wMax = Math.max(b._wp * 1.5, 3) + 5;
+      if (wl > wMax) { const k = wMax / wl; b.w[0] *= k; b.w[1] *= k; b.w[2] *= k; }
+    }
     this.finish(dt);
   }
 
@@ -600,6 +612,7 @@ export class World {
     b.finalize();
     b.sleeping = false;
     b.sleepT = 0;
+    b._nw = true;        // its cached contact impulses were for an immovable wall: warm-starting them on a light free body shoots it out at kilometres per second
     this.staticDirty = true;
   }
 
@@ -642,6 +655,7 @@ export class World {
           const b = list[j];
           if (a.sleeping && b.sleeping) continue;
           if (!(a.mask & b.group) || !(b.mask & a.group)) continue;
+          if ((a.ghostUntil > this.time && b.group === GROUP.CAR) || (b.ghostUntil > this.time && a.group === GROUP.CAR)) continue;   // crumbs born inside the striker do not collide with it for a moment (otherwise ~100 overlapping pieces fire the car out of the wall)
           if (cx !== Math.max(a._cx0, b._cx0) || cz !== Math.max(a._cz0, b._cz0)) continue;
           const A = a.aabb, B = b.aabb;
           if (A[3] < B[0] || B[3] < A[0] || A[4] < B[1] || B[4] < A[1] || A[5] < B[2] || B[5] < A[2]) continue;
@@ -733,6 +747,15 @@ export class World {
     const events = new Map();
     this.events = events;
     const vA = [0, 0, 0], vB = [0, 0, 0];
+    // breakable fixed bodies may give way before anything is solved. This has to be a pass of its own: a panel that breaks while the contact list is being prepared
+    // used to leave the contacts prepared earlier (effective mass of an immovable wall) pointing at a body that was now light and free - the solver then overshot ~400x per iteration.
+    if (this.preHit) for (let i = 0; i < this.nc; i++) {
+      const c = this.pool[i], a = c.a, b = c.b;
+      if (!(a.brk || b.brk)) continue;
+      a.velAt(c.p[0], c.p[1], c.p[2], vA); b.velAt(c.p[0], c.p[1], c.p[2], vB);
+      const vn = (vB[0] - vA[0]) * c.n[0] + (vB[1] - vA[1]) * c.n[1] + (vB[2] - vA[2]) * c.n[2];
+      if (vn < -2) { c.vn0 = vn; this.preHit(a, b, c); }
+    }
     for (let i = 0; i < this.nc; i++) {
       const c = this.contacts[i] = this.pool[i];
       const a = c.a, b = c.b;
@@ -756,25 +779,19 @@ export class World {
       c.vn0 = rx * n[0] + ry * n[1] + rz * n[2];
       c.vt0 = Math.hypot(rx - c.vn0 * n[0], ry - c.vn0 * n[1], rz - c.vn0 * n[2]);
       // breakable fixed bodies may give way before the impulse is solved
-      if (this.preHit && c.vn0 < -2 && (a.brk || b.brk)) {
-        this.preHit(a, b, c);
-        a.velAt(c.p[0], c.p[1], c.p[2], vA);
-        b.velAt(c.p[0], c.p[1], c.p[2], vB);
-        rx = vB[0] - vA[0]; ry = vB[1] - vA[1]; rz = vB[2] - vA[2];
-        c.vn0 = rx * n[0] + ry * n[1] + rz * n[2];
-      }
       c.mn = this.effMass(a, b, c.ra, c.rb, n);
       c.mt1 = this.effMass(a, b, c.ra, c.rb, c.t1);
       c.mt2 = this.effMass(a, b, c.ra, c.rb, c.t2);
       c.fric = Math.sqrt(a.fric * b.fric);
       const pen = Math.max(c.depth - 0.004, 0);
       let bias = Math.min((0.22 / dt) * pen, 3.0);
-      const rest = Math.max(a.rest, b.rest);
+      let rest = Math.max(a.rest, b.rest);
+      if (c.vn0 < -8 && (a.group === GROUP.CAR || b.group === GROUP.CAR)) rest /= 1 + (-c.vn0 - 8) / 8;     // a hard crash is plastic: the harder the hit, the less the car bounces off
       if (c.vn0 < -1.8) bias += -rest * c.vn0;
       c.bias = bias;
       // warm start
       c.jn = c.jt1 = c.jt2 = 0;
-      const prev = this.cache.get(key);
+      const prev = (a._nw || b._nw) ? null : this.cache.get(key);
       let isNew = true;
       if (prev) {
         isNew = false;
@@ -884,6 +901,7 @@ export class World {
     // wake sleeping bodies if hit hard
     for (let i = 0; i < this.nc; i++) {
       const c = this.pool[i];
+      c.a._nw = c.b._nw = false;
       for (const body of [c.a, c.b]) {
         if (body.sleeping && !body.fixed && body.invMass * c.jn > 0.3) body.wake();
       }

@@ -50,16 +50,18 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec3 aCol;
 layout(location=3) in vec2 aUv;
+layout(location=4) in float aTile;
 uniform mat4 uVP, uModel, uLightVP;
 uniform vec3 uEyeMod;
 uniform float uNBias;
 out vec3 vPosRel, vNrm, vCol, vWorldMod, vLocal;
 out vec2 vUv;
+flat out float vTile;
 out vec4 vShadow;
 void main(){
   vec4 p = uModel * vec4(aPos, 1.);
   vec3 n = normalize(mat3(uModel) * aNrm);
-  vPosRel = p.xyz; vNrm = n; vCol = aCol; vUv = aUv; vLocal = aPos;
+  vPosRel = p.xyz; vNrm = n; vCol = aCol; vUv = aUv; vLocal = aPos; vTile = aTile;
   vWorldMod = p.xyz + uEyeMod;
   vShadow = uLightVP * vec4(p.xyz + n * uNBias, 1.);
   gl_Position = uVP * p;
@@ -70,6 +72,7 @@ precision highp float;
 precision highp sampler2DShadow;
 in vec3 vPosRel, vNrm, vCol, vWorldMod, vLocal;
 in vec2 vUv;
+flat in float vTile;
 in vec4 vShadow;
 out vec4 outCol;
 uniform sampler2DShadow uShadowMap;
@@ -136,7 +139,20 @@ void main(){
   float alpha = 1.;
   float ao = 1.;
   vec4 tx = vec4(0.);
-  if (uTexOn > 0.5) tx = texture(uTex, vUv);
+  // building surfaces: one quad per face, the atlas tile repeats here (vTile = cell + 1, vUv = tile-space coordinate). Gradients are taken from the
+  // unwrapped coordinate so mip level and anisotropy are the same as if the face had been cut into 1.2 m quads.
+  vec2 dUx = dFdx(vUv), dUy = dFdy(vUv);
+  bool tiled = vTile > 0.5;
+  vec2 acell = vec2(0.);
+  if (uTexOn > 0.5) {
+    if (tiled) {
+      float ti = vTile - 1.;
+      acell = vec2(mod(ti, 4.), floor(ti / 4.));
+      vec2 fr = fract(vUv);
+      vec2 auv = (acell + vec2(0.012 + 0.976 * fr.x, 1. - 0.012 - 0.976 * fr.y)) * 0.25;
+      tx = textureGrad(uTex, auv, dUx * vec2(0.244, -0.244), dUy * vec2(0.244, -0.244));
+    } else tx = texture(uTex, vUv);
+  }
 
   if (uKind == 4) {
     float r; albedo = asphalt(vWorldMod * uTexScale, dist, r) * uBase; rough = r; metal = 0.; coat = 0.;
@@ -171,7 +187,7 @@ void main(){
     // textured standard
     albedo = tx.rgb * uBase * vCol;
     // atlas cells with real surface physics: glass (2,1), brushed metal (1,2), marble (0,3), brass (3,3), fluted panel (2,3)
-    vec2 cell = floor(vUv * 4.);
+    vec2 cell = tiled ? acell : floor(vUv * 4.);
     if (cell.x == 2. && cell.y == 1.) { albedo = vCol * 0.62; metal = 0.9; rough = 0.02; }
     else if (cell.x == 1. && cell.y == 2.) { metal = 0.85; rough = 0.3; }
     else if (cell.x == 3. && cell.y == 3.) { metal = 0.9; rough = 0.25; }

@@ -12,6 +12,7 @@ import { shapeElements } from './shapes.js';
 import { validateBuilding } from './validate.js';
 import { PAINTS } from '../../data/materials.js';
 import { GeoBuf, makeAtlas, T, hexRGB } from './render.js';
+import { FaceCuller, alignedBox } from './cull.js';
 import { RECIPES } from '../../data/recipes.js';
 import { LIFT_STYLES, buildCabinMesh, buildLeafMesh } from './lift.js';
 import { DOOR_TYPES, doorType } from './catalog.js';
@@ -157,16 +158,68 @@ export class Structures {
     for (const L of B.lifts || []) { for (const b of L.doorBodies) if (b) list.push(b); if (L.floorBody) list.push(L.floorBody); if (L.backBody) list.push(L.backBody); }
     return list;
   }
+  // everything dynamic that belongs to a building: its standing panels, furniture, lift pieces, panels that came loose and the rubble they made
+  stashOf(B) {
+    const list = this.bodiesOf(B);
+    for (const P of B.free) if (P.body && !list.includes(P.body)) list.push(P.body);
+    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) list.push(d.body);
+    return list;
+  }
+  // how far the wreck reaches beyond the footprint (m): the farthest loose piece, 2..30
+  spreadOf(B) {
+    const f = B.fp; let m = 2;
+    const see = (b) => { if (!b || b.fixed) return; const dx = Math.max(f.x0 - b.pos[0], 0, b.pos[0] - f.x1), dz = Math.max(f.z0 - b.pos[2], 0, b.pos[2] - f.z1); const d = Math.hypot(dx, dz); if (d > m) m = d; };
+    for (const P of B.free) see(P.body);
+    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) see(d.body);
+    return Math.min(30, m + 1);
+  }
+  // A wrecked building may freeze into a "photo" once everything of it has come to rest: nothing is still falling, no collapse is pending, and
+  // loose pieces that only creep (< 0.6 m/s) are put to sleep right here. Moving pieces keep it awake.
+  settled(B) {
+    if (B.checkStab || B.dirty || this.shatterQ.length) return false;
+    for (const P of B.panels) if (P.state === 'fixed' && P.releaseAt) return false;
+    let ok = true;
+    const now = this.world.time;
+    const chk = (b) => {
+      if (!b || b.fixed || b.sleeping || b.removed) return;
+      if (b.pos[1] < -20) return;
+      const v2 = b.v[0] * b.v[0] + b.v[1] * b.v[1] + b.v[2] * b.v[2], w2 = b.w[0] * b.w[0] + b.w[1] * b.w[1] + b.w[2] * b.w[2];
+      if (v2 < 0.36 && w2 < 4) { b.sleep(); return; }
+      // thin plates in a pile rattle in place at the contact and never quite stop: a piece that stays within 2 cm and 1.6 degrees for 0.8 s is at rest
+      const a = b._rest;
+      if (a && now - a.seen < 1 && Math.hypot(b.pos[0] - a.p[0], b.pos[1] - a.p[1], b.pos[2] - a.p[2]) < 0.02 && Math.abs(b.q[0] * a.q[0] + b.q[1] * a.q[1] + b.q[2] * a.q[2] + b.q[3] * a.q[3]) > 0.9999) {
+        a.seen = now;
+        if (now - a.t > 0.8 && v2 < 4) { b.sleep(); return; }
+      } else b._rest = { t: now, seen: now, p: b.pos.slice(), q: b.q.slice() };
+      ok = false;
+    };
+    for (const P of B.free) chk(P.body);
+    for (const it of B.lay.furn) chk(it.body);
+    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) chk(d.body);
+    return ok;
+  }
   sleepBuilding(B) {
-    if (B.dormant || B.freed > 0 || B.removed) return;
-    for (const it of B.lay.furn) if (it.body && !it.body.sleeping) return;            // furniture still moving: stay awake
-    for (const L of B.lifts || []) if (L.state !== 'idle' || L.carry) return;           // a lift in motion: stay awake
-    this.world.removeMany(this.bodiesOf(B));
+    if (B.dormant || B.removed) return false;
+    for (const L of B.lifts || []) if (L.state !== 'idle' || L.carry) return false;           // a lift in motion: stay awake
+    let list;
+    if (B.freed > 0 || B.free.size) {
+      if (!this.settled(B)) return false;
+      B.spread = this.spreadOf(B);
+      list = this.stashOf(B); B.stash = list;                                                 // frozen like a photo: the broken state stays, only physics leaves
+    } else {
+      for (const it of B.lay.furn) if (it.body && !it.body.sleeping) return false;            // furniture still moving: stay awake
+      list = this.bodiesOf(B);
+    }
+    this.world.removeMany(list);
     B.dormant = true; B.lazy = true;
+    return true;
   }
   wakeBuilding(B) {
     if (!B.dormant) return;
-    this.world.addMany(this.bodiesOf(B));
+    if (B.stash) {
+      const alive = B.stash.filter((b) => !(b.rub && (b.rub.t >= 900 || b.rub.dead)) && !(b.panel && b.panel.state === 'gone') && b.pos[1] > -30);
+      B.stash = null; this.world.addMany(alive);
+    } else this.world.addMany(this.bodiesOf(B));
     B.dormant = false; B.far = 0;
   }
   sleepAll() { this.lazyOn = true; for (const B of this.list) this.sleepBuilding(B); }
@@ -174,16 +227,19 @@ export class Structures {
   static reach(B, p, m) { const f = B.fp; return segHitsRect(p.x, p.z, p.x2, p.z2, f.x0, f.z0, f.x1, f.z1, p.r + m); }
   // pts: watchers [{x,z,x2,z2,r}] = a car's path for the next fraction of a second, or a walking person (x2=x). A building is awake only while a watcher's path
   // reaches it; waking happens in the same frame, before the physics step, so there is no delay and nothing to bounce off.
+  // A building that was hit keeps its wreck (loose pieces) awake while a watcher is near; ~10 m clear of the wreck it freezes into a photo: no bodies at all,
+  // drawn exactly as it lies. Coming back within reach thaws every piece in the pose it was frozen in.
   updateDormancy(pts) {
     if (!this.lazyOn) return;
-    const all = pts.slice();
-    for (const B of this.list) if (!B.removed && !B.dormant && (B.freed > 0 || B.free.size)) all.push({ x: B.x, z: B.z, x2: B.x, z2: B.z, r: B.radius + 4 });   // a collapsing building wakes its neighbours
     for (const B of this.list) {
       if (B.removed || !B.lazy || !B.fp) continue;
+      const dmg = B.freed > 0 || B.free.size > 0 || !!B.stash;
+      if (dmg && !B.dormant && (B.spT = (B.spT || 0) + 1) % 15 === 0) B.spread = this.spreadOf(B);
+      const sp = dmg ? Math.min(B.spread || 8, 14) : 0;
       let near = false, far = true;
-      for (const p of all) { if (Structures.reach(B, p, 0)) { near = true; far = false; break; } if (far && Structures.reach(B, p, 22)) far = false; }
+      for (const p of pts) { if (Structures.reach(B, p, sp)) { near = true; far = false; break; } if (far && Structures.reach(B, p, sp + 6)) far = false; }
       if (B.dormant) { if (near) this.wakeBuilding(B); }
-      else if (far && B.freed === 0 && !B.free.size) { B.far = (B.far || 0) + 1; if (B.far > 24) { this.sleepBuilding(B); B.far = 0; } }
+      else if (far) { B.far = (B.far || 0) + 1; if (B.far > 24 && this.sleepBuilding(B)) B.far = 0; }
       else B.far = 0;
     }
   }
@@ -266,19 +322,32 @@ export class Structures {
     const g = new GeoBuf(), gl = new GeoBuf();           // gl: window glass, drawn in the transparent pass so the room behind it shows through
     const off = [B.x, 0, B.z];
     let k = 0;
-    for (const P of B.panels) if (P.state === 'fixed' && !P.e.ghost && !P.dyn) {
+    // faces that are completely covered by another solid panel are never visible: leave them out (see cull.js)
+    const inMesh = (P) => P.state === 'fixed' && !P.e.ghost && !P.dyn;
+    const culler = new FaceCuller(B.panels.filter((P) => inMesh(P) && P.kind !== 'pane'));
+    for (const P of B.panels) if (inMesh(P)) {
       const sh = 0.96 + 0.04 * ((P.e.id * 0.618) % 1);
       const pane = P.kind === 'pane', tg = pane ? gl : g;
-      if (P.q) tg.boxQ(P.q, [P.cx, P.cy, P.cz], P.hx, P.hy, P.hz, this.faceCfg(P), off, (P.s0 + P.s1) / 2, pane ? 1 : sh);
-      else tg.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, this.faceCfg(P), off, pane ? 1 : sh, !pane);
+      let cfg = this.faceCfg(P);
+      if (pane) {   // glass is a thin sheet: only its two broad faces can ever be seen
+        const h = [P.hx, P.hy, P.hz], ti = h[0] <= h[1] && h[0] <= h[2] ? 0 : h[1] <= h[2] ? 1 : 2, c0 = cfg;
+        cfg = (fi) => ((fi >> 1) === ti ? c0(fi) : null);
+      } else {
+        const bx = alignedBox(P), mask = bx ? culler.hidden(bx, P) : 0;
+        if (mask) { const c0 = cfg; cfg = (fi) => ((mask >> fi) & 1 ? null : c0(fi)); }
+      }
+      if (P.q) tg.boxQ(P.q, [P.cx, P.cy, P.cz], P.hx, P.hy, P.hz, cfg, off, (P.s0 + P.s1) / 2, pane ? 1 : sh);
+      else tg.box(P.cx, P.cy, P.cz, P.hx, P.hy, P.hz, cfg, off, pane ? 1 : sh, !pane);
       if ((++k & 255) === 0) yield 'mesh';
     }
-    const trimC = B.trim;
+    const trimC = B.trim, nPanelQuads = g.n;
     for (const D of B.decos || []) {
       if (D.host && D.host.state !== 'fixed') continue;
       const e = D.e, c = e.tint ? hexRGB(e.tint) : trimC;
-      g.boxQ(e.q, [e.cx, e.cy, e.cz], e.hx, e.hy, e.hz, () => [T.white, c[0], c[1], c[2]], off, 0, 1);
+      const bx = e.q ? alignedBox({ q: e.q, hx: e.hx, hy: e.hy, hz: e.hz, cx: e.cx, cy: e.cy, cz: e.cz }) : null, mask = bx ? culler.hidden(bx, null) : 0;
+      g.boxQ(e.q, [e.cx, e.cy, e.cz], e.hx, e.hy, e.hz, (fi) => ((mask >> fi) & 1 ? null : [T.white, c[0], c[1], c[2]]), off, 0, 1);
     }
+    if (B.cost) B.cost.qPanels = nPanelQuads, B.cost.qDecos = g.n - nPanelQuads;
     const old = B.mesh, tg0 = performance.now();
     const fin = g.n ? g.finish() : null, tg1 = performance.now();
     B.mesh = fin ? this.r.createMesh(fin, { mat: this.material(), radius: B.radius }) : null;
@@ -453,8 +522,9 @@ export class Structures {
       body.addBox([c.dims[0] / 2, c.dims[1] / 2, c.dims[2] / 2]);
       body.v = [dir[0] * speed * 0.4 + (Math.random() - 0.5) * 4, 1 + Math.random() * 3, dir[2] * speed * 0.4 + (Math.random() - 0.5) * 4];
       body.w = [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8];
+      body.ghostUntil = world.time + 0.2;
       world.add(body);
-      const d = { body, kind: 'rubble', mesh: this.rubbleMesh(c.tile, c.tint, c.dims), s: 1, t: 0, tile: c.tile, tint: c.tint, dims: c.dims, dens: c.dens, m: c.m, gen: c.gen || 0 };
+      const d = { body, kind: 'rubble', B, mesh: this.rubbleMesh(c.tile, c.tint, c.dims), s: 1, t: 0, tile: c.tile, tint: c.tint, dims: c.dims, dens: c.dens, m: c.m, gen: c.gen || 0 };
       body.rub = d;
       this.ctx.debris.push(d);
       this.rubble.push(d);
@@ -778,16 +848,20 @@ export class Structures {
     P.hp -= E;
     const n = c.n, sg = a.brk ? -1 : 1;
     const dir = [n[0] * sg, n[1] * sg, n[2] * sg];
+    // the striker's velocity as the solver holds it right now can already contain the impulse of an earlier contact in this same step (a car hitting many panels at once);
+    // what flies off must never be faster than the hit itself, or crumbs get shot 40 m sideways and wake half the street
+    const sv = Math.hypot(O.v[0], O.v[1], O.v[2]), vcap = Math.max(v, 4) * 1.15;
+    const ov = sv > vcap ? [O.v[0] * vcap / sv, O.v[1] * vcap / sv, O.v[2] * vcap / sv] : O.v;
     const cb = this.ctx.onProp;
     if (cb) cb(Math.min(E * 0.004, 4000));
     this.fxAt(P, c.p, E, dir);
     if (this.ctx.sfx && this.soundT <= 0 && E > 20e3) { this.soundT = 0.08; this.ctx.sfx.crash(c.p, clamp(E / 400e3, 0.1, 1), E > 120e3); }
     // shock travels through the mortar bond to neighbouring panels (stronger bond = less spreads)
     const share = P.mat === 'rcc' ? 0.05 : P.mat === 'glass' ? 0.02 : 0.14;
-    for (const Q of [...P.nL, ...P.nR]) if (Q.state === 'fixed') { Q.hp -= E * share; if (Q.hp <= 0) this.breakPanel(Q, O.v, E * 0.3, dir); }
+    for (const Q of [...P.nL, ...P.nR]) if (Q.state === 'fixed') { Q.hp -= E * share; if (Q.hp <= 0) this.breakPanel(Q, ov, E * 0.3, dir); }
     for (const Q of P.above) if (Q.state === 'fixed') Q.hp -= E * 0.03;
     for (const Q of P.below) if (Q.state === 'fixed') Q.hp -= E * 0.03;
-    if (P.hp <= 0) this.breakPanel(P, O.v, E, dir);
+    if (P.hp <= 0) this.breakPanel(P, ov, E, dir);
     else P.B.dirty = true;
     if (cb && P.hp <= 0) cb(this.breakCost(P));
   }
@@ -917,8 +991,9 @@ export class Structures {
         body.addBox([dd[0] / 2, dd[1] / 2, dd[2] / 2]);
         body.v = [ob.v[0] * 0.6 + (Math.random() - 0.5) * speed * 0.5, Math.abs(ob.v[1]) * 0.3 + Math.random() * speed * 0.25, ob.v[2] * 0.6 + (Math.random() - 0.5) * speed * 0.5];
         body.w = [(Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9];
+        body.ghostUntil = this.world.time + 0.2;
         this.world.add(body);
-        const d = { body, kind: 'rubble', mesh: this.rubbleMesh(R.tile, R.tint, dd), s: 1, t: 0, tile: R.tile, tint: R.tint, dims: dd, dens: R.dens, m, gen: R.gen + 1 };
+        const d = { body, kind: 'rubble', B: R.B, mesh: this.rubbleMesh(R.tile, R.tint, dd), s: 1, t: 0, tile: R.tile, tint: R.tint, dims: dd, dens: R.dens, m, gen: R.gen + 1 };
         body.rub = d;
         this.ctx.debris.push(d); this.rubble.push(d);
       }
@@ -934,6 +1009,7 @@ export class Structures {
     this.soundT -= dt;
     const t = this.ctx.time, fx = this.ctx.fx;
     for (const B of this.list) {
+      if (B.dormant && !B.dirty && !B.checkStab) continue;                           // asleep (or frozen): nothing to simulate, nothing to rebuild
       if (B.checkStab) { B.checkStab = false; this.checkStability(B); }
       for (const P of B.panels) {
         if (P.state === 'fixed' && P.releaseAt && t >= P.releaseAt) {

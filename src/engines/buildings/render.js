@@ -136,8 +136,11 @@ const FACES = [
 export const hexRGB = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 
 export class GeoBuf {
-  constructor() { this.pos = []; this.nrm = []; this.uv = []; this.col = []; this.idx = []; this.n = 0; }
-  // cfg(i) -> [tile, r, g, b] for face i (order +x -x +y -y +z -z) or null to skip it. off = world offset of the local origin
+  constructor() { this.pos = []; this.nrm = []; this.uv = []; this.col = []; this.tile = []; this.idx = []; this.n = 0; }
+  // cfg(i) -> [tile, r, g, b] for face i (order +x -x +y -y +z -z) or null to skip it. off = world offset of the local origin.
+  // Every face is ONE quad (two triangles, however large). The atlas tile repeats in the fragment shader: uv is the face's tile-space coordinate
+  // (1.0 = TILE metres, anchored on the world grid so brick courses line up across neighbouring panels) and the atlas cell travels in `tile` (index + 1).
+  // The only extra cut is at 1.2 m for faces that stand on the ground, so the darker ground weathering ramp is unchanged.
   box(cx, cy, cz, hx, hy, hz, cfg, off = [0, 0, 0], shade = 1, ground = true) {
     const h = [hx, hy, hz], c = [cx, cy, cz];
     for (let fi = 0; fi < 6; fi++) {
@@ -149,21 +152,21 @@ export class GeoBuf {
       // extents of the face along its u / v axes, in the (signed) world coordinate of that axis
       const cu = (c[iu] + off[iu]) * su, cv = (c[iv] + off[iv]) * sv;
       const u0 = cu - h[iu], u1 = cu + h[iu], v0 = cv - h[iv], v1 = cv + h[iv];
-      const us = [u0]; for (let k = Math.floor(u0 / TILE) + 1; k * TILE < u1 - 1e-4; k++) if (k * TILE > u0 + 1e-4) us.push(k * TILE); us.push(u1);
-      const vs = [v0]; for (let k = Math.floor(v0 / TILE) + 1; k * TILE < v1 - 1e-4; k++) if (k * TILE > v0 + 1e-4) vs.push(k * TILE); vs.push(v1);
-      for (let a = 0; a < us.length - 1; a++) for (let b = 0; b < vs.length - 1; b++) {
-        const ua = us[a], ub = us[a + 1], va = vs[b], vb = vs[b + 1];
-        const gu = Math.floor((ua + ub) / 2 / TILE) * TILE, gv = Math.floor((va + vb) / 2 / TILE) * TILE;
-        const corners = [[ua, va], [ub, va], [ub, vb], [ua, vb]];
+      const gu = Math.floor(u0 / TILE + 1e-6) * TILE, gv = Math.floor(v0 / TILE + 1e-6) * TILE;
+      const ni = f.n.findIndex((q) => q !== 0);
+      const vs = [v0, v1];
+      if (ground && iv === 1 && sv > 0 && v0 < TILE - 1e-4 && v1 > TILE + 1e-4) vs.splice(1, 0, TILE);   // keeps the same ground-weathering ramp as before (0 .. 1.2 m)
+      for (let b = 0; b < vs.length - 1; b++) {
+        const va = vs[b], vb = vs[b + 1];
+        const corners = [[u0, va], [u1, va], [u1, vb], [u0, vb]];
         for (const [pu, pv] of corners) {
           const p = [0, 0, 0];
           p[iu] = (pu / su) - off[iu]; p[iv] = (pv / sv) - off[iv];
-          const ni = f.n.findIndex((q) => q !== 0);
           p[ni] = c[ni] + f.n[ni] * h[ni];
           this.pos.push(p[0], p[1], p[2]);
           this.nrm.push(f.n[0], f.n[1], f.n[2]);
-          const uv = tileUV(spec[0], (pu - gu) / TILE, (pv - gv) / TILE);
-          this.uv.push(uv[0], uv[1]);
+          this.uv.push((pu - gu) / TILE, (pv - gv) / TILE);
+          this.tile.push(spec[0] + 1);
           // weathering: darker near the ground, tiny per-panel variation
           const wy = p[1];
           const ao = ground ? 0.72 + 0.28 * Math.min(1, Math.max(0, wy / 0.7)) : 1;
@@ -187,7 +190,7 @@ export class GeoBuf {
   }
   finish() {
     const g = makeGeo(this.n, this.idx.length);
-    g.pos.set(this.pos); g.nrm.set(this.nrm); g.uv.set(this.uv); g.col.set(this.col); g.idx.set(this.idx);
+    g.pos.set(this.pos); g.nrm.set(this.nrm); g.uv.set(this.uv); g.col.set(this.col); g.idx.set(this.idx); g.tile = new Float32Array(this.tile);
     for (let i = 0; i < g.idx.length; i += 3) {
       const a = g.idx[i], b = g.idx[i + 1], c = g.idx[i + 2];
       const ux = g.pos[b * 3] - g.pos[a * 3], uy = g.pos[b * 3 + 1] - g.pos[a * 3 + 1], uz = g.pos[b * 3 + 2] - g.pos[a * 3 + 2];

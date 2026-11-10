@@ -355,7 +355,7 @@ export class Scene {
         let t = l2 > 1e-6 ? ((x - q.x) * dx + (z - q.z) * dz) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
         const ex = x - (q.x + dx * t), ez = z - (q.z + dz * t), d2 = ex * ex + ez * ez;
         if (d2 < lim * lim) { near = true; break; }
-        if (far && d2 < (lim + 22) * (lim + 22)) far = false;
+        if (far && d2 < (lim + 6) * (lim + 6)) far = false;
       }
       if (p.shelved) { if (near) { add.push(b); p.shelved = false; p.far = 0; } }
       else if (b.sleeping && !b.fixed) { if (far) { if ((p.far = (p.far || 0) + 1) > 24) { rem.push(b); p.shelved = true; p.far = 0; } } else p.far = 0; }
@@ -367,7 +367,7 @@ export class Scene {
   // wake every building and prop within R metres of a point (explosions, scripted impacts)
   wakeAround(x, z, R) {
     const q = { x, z, x2: x, z2: z, r: R };
-    for (const B of this.structures.list) if (B.dormant && B.fp && Structures.reach(B, q, 0)) this.structures.wakeBuilding(B);
+    for (const B of this.structures.list) if (B.dormant && B.fp && Structures.reach(B, q, B.stash ? Math.min(B.spread || 8, 14) : 0)) this.structures.wakeBuilding(B);
     const add = [];
     for (const p of this.props) if (p.shelved && !p.dead && Math.hypot(p.body.pos[0] - x, p.body.pos[2] - z) < R + p.radius) { add.push(p.body); p.shelved = false; }
     if (add.length) this.world.addMany(add);
@@ -389,6 +389,7 @@ export class Scene {
     if (this.land) {
       for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
       for (const m of this.land.holes) r.add(m, this.markModel, { cast: false });
+      for (const t of this.land.furMeshes) { if (Math.abs(t.cx - cam[0]) < 800 && Math.abs(t.cz - cam[2]) < 800) r.add(t.m, this.markModel, { cast: false }); }
       for (const t of this.land.treeMeshes) { if (Math.abs(t.cx - cam[0]) < 520 && Math.abs(t.cz - cam[2]) < 520) r.add(t.m, this.markModel, { cast: false }); }
     }
     const cx = cam[0], cz = cam[2];

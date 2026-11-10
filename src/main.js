@@ -737,6 +737,7 @@ function scanMovers() {
     if (b.fixed || b.sleeping || b.removed || b.person || (b.userData && b.userData.vehicle)) continue;
     const sp2 = b.v[0] * b.v[0] + b.v[2] * b.v[2];
     if (sp2 < 4 || b.pos[1] < -5) continue;
+    if (b.mass < 25 && b.mass * Math.sqrt(sp2) < 120) continue;                        // a flying brick or plaster flake must not wake a whole house: only heavy pieces (panels, slabs, big lumps) do
     const k = Math.max(3, Math.sqrt(sp2) * 0.35) / Math.sqrt(sp2);
     debrisPts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + b.v[0] * k, z2: b.pos[2] + b.v[2] * k, r: 1.5 });
     if (debrisPts.length >= 160) break;

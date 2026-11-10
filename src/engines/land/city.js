@@ -203,7 +203,12 @@ const MATS = () => ({
 
 export function buildLand(r, plan) {
   const parts = {}; const Bd = (k) => parts[k] || (parts[k] = new Builder([0, 0, 0]));
-  const slab = (bd, part, x0, z0, x1, z1, y0, y1) => bd.addGeo(rbox(Math.max((x1 - x0) / 2, 0.001), Math.max((y1 - y0) / 2, 0.0005), Math.max((z1 - z0) / 2, 0.001), 0.0004, 1), 'paint', part, M.tr((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2));
+  // road paint, kerb strips, lawns, fields: layers a few millimetres thick, so only the top face can ever be seen. One quad (2 triangles) instead of a rounded box (108).
+  const slab = (bd, part, x0, z0, x1, z1, y0, y1) => {
+    const cx0 = (x0 + x1) / 2, cz0 = (z0 + z1) / 2, hx = Math.max((x1 - x0) / 2, 0.001), hz = Math.max((z1 - z0) / 2, 0.001), y = (y0 + y1) / 2 + Math.max((y1 - y0) / 2, 0.0005);
+    const a = bd.vert(cx0 - hx, y, cz0 - hz, 0, 1, 0, 3, 3), b = bd.vert(cx0 - hx, y, cz0 + hz, 0, 1, 0, 3, 3), c = bd.vert(cx0 + hx, y, cz0 + hz, 0, 1, 0, 3, 3), d = bd.vert(cx0 + hx, y, cz0 - hz, 0, 1, 0, 3, 3);
+    bd.grp(part, 'paint').idx.push(a, b, c, a, c, d);
+  };
   const Q = (key, part, x0, z0, x1, z1) => slab(Bd(key), part, x0, z0, x1, z1, 0.004 + 0.0008 * part, 0.0062 + 0.0008 * part);
   const solid = (key, part, cx, cy, cz, hx, hy, hz) => Bd(key).addGeo(rbox(hx, hy, hz, Math.min(hx, hy, hz) * 0.25, 1), 'paint', part, M.tr(cx, cy, cz));
   const { cx, cz, ext, roads } = plan;
@@ -262,11 +267,12 @@ export function buildLand(r, plan) {
     if (F.lights) for (let t = nearA + 10; t < nearB; t += F.lightEvery) { if (crossing(rd, t, 4)) continue; const c = F.lights === 'median' ? 0 : hw + (T.footpath ? 1.0 : 0.6) ; const x = rd.axis === 'x' ? t : rd.c + c, z = rd.axis === 'x' ? rd.c + c : t; FUR.push(['light', x, z, F.lights === 'median' ? 11 : 7.5, rd.axis]); }
     if (F.sign) for (let t = nearA + 120; t < nearB; t += F.sign) { const c = hw + 1.6; const x = rd.axis === 'x' ? t : rd.c + c, z = rd.axis === 'x' ? rd.c + c : t; FUR.push(['sign', x, z, rd.axis]); }
   }
+  const fk = (x, z) => 'fur:' + Math.floor(x / 240) + ':' + Math.floor(z / 240);   // roadside furniture is merged per 240 m cell so far cells can be skipped
   for (const f of FUR) {
-    if (f[0] === 'post') solid('fur', P.steel, f[1], 0.35, f[2], 0.05, 0.35, 0.05);
-    else if (f[0] === 'beam') solid('fur', P.steel, f[1], 0.62, f[2], Math.max(f[3], 0.02), 0.16, Math.max(f[4], 0.02));
-    else if (f[0] === 'light') { const [, x, z, h, ax] = f; solid('fur', P.pole, x, h / 2, z, 0.07, h / 2, 0.07); if (ax === 'x') solid('fur', P.pole, x, h - 0.1, z + 1.2, 0.04, 0.04, 1.3); else solid('fur', P.pole, x + 1.2, h - 0.1, z, 1.3, 0.04, 0.04); solid('fur', P.signW, ax === 'x' ? x : x + 2.4, h - 0.18, ax === 'x' ? z + 2.4 : z, 0.35, 0.06, 0.18); }
-    else if (f[0] === 'sign') { const [, x, z, ax] = f; solid('fur', P.pole, x - 1.4, 1.8, z, 0.05, 1.8, 0.05); solid('fur', P.pole, x + 1.4, 1.8, z, 0.05, 1.8, 0.05); solid('fur', P.sign, x, 3.5, z, 2.0, 0.7, 0.05); solid('fur', P.signW, x, 3.5, z + 0.045, 1.9, 0.62, 0.012); }
+    if (f[0] === 'post') solid(fk(f[1], f[2]), P.steel, f[1], 0.35, f[2], 0.05, 0.35, 0.05);
+    else if (f[0] === 'beam') solid(fk(f[1], f[2]), P.steel, f[1], 0.62, f[2], Math.max(f[3], 0.02), 0.16, Math.max(f[4], 0.02));
+    else if (f[0] === 'light') { const [, x, z, h, ax] = f; solid(fk(f[1], f[2]), P.pole, x, h / 2, z, 0.07, h / 2, 0.07); if (ax === 'x') solid(fk(f[1], f[2]), P.pole, x, h - 0.1, z + 1.2, 0.04, 0.04, 1.3); else solid(fk(f[1], f[2]), P.pole, x + 1.2, h - 0.1, z, 1.3, 0.04, 0.04); solid(fk(f[1], f[2]), P.signW, ax === 'x' ? x : x + 2.4, h - 0.18, ax === 'x' ? z + 2.4 : z, 0.35, 0.06, 0.18); }
+    else if (f[0] === 'sign') { const [, x, z, ax] = f; solid(fk(f[1], f[2]), P.pole, x - 1.4, 1.8, z, 0.05, 1.8, 0.05); solid(fk(f[1], f[2]), P.pole, x + 1.4, 1.8, z, 0.05, 1.8, 0.05); solid(fk(f[1], f[2]), P.sign, x, 3.5, z, 2.0, 0.7, 0.05); solid(fk(f[1], f[2]), P.signW, x, 3.5, z + 0.045, 1.9, 0.62, 0.012); }
   }
   // chowk, ponds, parking pads (+ bays), lawns, pond edge
   for (const c of plan.chowks) Q('lot', P.chowk, c.x0, c.z0, c.x1, c.z1);
@@ -280,7 +286,12 @@ export function buildLand(r, plan) {
   for (const l of plan.lawns) Q('lot', P.grass, l.x0, l.z0, l.x1, l.z1);
 
   const PM = MATS(), meshes = [];
-  for (const k of Object.keys(parts)) { const f = parts[k].finish(); f.groups.forEach((g) => { g.mat = PM[g.part]; }); meshes.push(r.createMesh(f.geo, { groups: f.groups, radius: 9000 })); }
+  const furMeshes = [];
+  for (const k of Object.keys(parts)) {
+    const f = parts[k].finish(); f.groups.forEach((g) => { g.mat = PM[g.part]; });
+    if (k.startsWith('fur:')) { const [, i, j] = k.split(':'); furMeshes.push({ m: r.createMesh(f.geo, { groups: f.groups, radius: 220 }), cx: (+i + 0.5) * 240, cz: (+j + 0.5) * 240 }); }
+    else meshes.push(r.createMesh(f.geo, { groups: f.groups, radius: 9000 }));
+  }
 
   // trees merged per 240 m cell for distance culling
   const cell = new Map();
@@ -313,7 +324,7 @@ export function buildLand(r, plan) {
     if (holes.length > 40) holes.shift();
     return true;
   };
-  return { meshes, treeMeshes, holes, roadHole };
+  return { meshes, furMeshes, treeMeshes, holes, roadHole };
 }
 
 // ---------------------------------------------------------------- streaming of buildings around the player
