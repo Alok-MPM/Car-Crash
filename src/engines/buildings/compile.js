@@ -83,6 +83,7 @@ const segPos = (s, x, z) => (s.axis === 'x' ? x : z);
 // ---------- main entry ----------
 export function compileDesign(D) {
   const style = applyPalette(STYLES[D.style] || STYLES.modern, STYLES[D.style] ? D.style : 'modern', D.seed || 7);
+  const WOODY = D.style === 'modern' || D.style === 'dark';   // fins / louvres on these styles are timber
   const mat = D.mat || style.mat || 'block';
   const floors = D.floors;
   const shapes = [], furn = [], rooms = [], hazards = [], stairsOut = [], acts = [], issues = [];
@@ -356,7 +357,7 @@ export function compileDesign(D) {
       const sp = ft.spacing || 0.22, th = ft.th || 0.09, dz = ft.depth || 0.16;
       const ya = base[ft.f0], yb = base[ft.f1] + H[ft.f1];
       const zf = ft.zf ?? bz1;
-      for (let x = ft.x0 + sp / 2; x < ft.x1; x += sp) shapes.push({ t: 'box', cx: x, cz: zf + dz / 2 + (ft.off || 0), y0: ya, w: th, d: dz, h: yb - ya, f: ft.f0, tint: ft.tint || style.fin, anchored: true, fin: true });
+      for (let x = ft.x0 + sp / 2; x < ft.x1; x += sp) shapes.push({ t: 'box', cx: x, cz: zf + dz / 2 + (ft.off || 0), y0: ya, w: th, d: dz, h: yb - ya, f: ft.f0, tint: ft.tile || WOODY ? ft.tint : (ft.tint || style.fin), tile: ft.tile || (WOODY ? 'wood' : undefined), anchored: true, fin: true });
     } else if (ft.t === 'panel') {
       if (hitsDoor(ft.x0, ft.x1, base[ft.f0] + (ft.dy || 0), ft.h ? base[ft.f0] + (ft.dy || 0) + ft.h : base[ft.f1] + H[ft.f1]) && (ft.zf ?? bz1) >= bz1 - 0.01) { const iv = carve(ft.x0, ft.x1, base[ft.f0] + (ft.dy || 0), ft.h ? base[ft.f0] + (ft.dy || 0) + ft.h : base[ft.f1] + H[ft.f1]); if (!ft._carved) for (const [a, b] of iv) feat.push({ ...ft, x0: a, x1: b, _carved: true }); continue; }
       const ya = base[ft.f0] + (ft.dy || 0), yb = ft.h ? ya + ft.h : base[ft.f1] + H[ft.f1];
@@ -373,7 +374,8 @@ export function compileDesign(D) {
       const org = face === 'front' ? [0, 0, ft.zf ?? bz1] : face === 'back' ? [0, 0, bz0] : face === 'right' ? [bx1, 0, 0] : [bx0, 0, 0];
       const f0 = ft.f0 ?? ft.f ?? 1, f1 = ft.f1 ?? f0;
       const vLo = base[f0] + (ft.dy || 0), vHi = ft.vTop != null ? ft.vTop : base[f1] + H[f1] + SLAB;
-      const common = { o: org, face, f: f0, tint: ft.tint, tile: ft.tile };
+      const woodLouvre = ft.t === 'louvre' && !ft.tile && WOODY;   // timber louvres on modern / luxury houses carry real wood grain
+      const common = { o: org, face, f: f0, tint: woodLouvre ? undefined : ft.tint, tile: woodLouvre ? 'wood' : ft.tile };
       if ((face === 'front') && ['cframe', 'jali'].includes(ft.t) && hitsDoor(ft.u0, ft.u1, vLo, vHi)) { issues.push('engine: ' + ft.t + ' would block a door - removed'); continue; }
       if (face === 'front' && ft.t === 'volume') {
         const vH2 = ft.h != null ? vLo + ft.h : vHi;

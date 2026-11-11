@@ -390,7 +390,14 @@ export class Scene {
       for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
       for (const m of this.land.holes) r.add(m, this.markModel, { cast: false });
       for (const t of this.land.furMeshes) { if (Math.abs(t.cx - cam[0]) < 800 && Math.abs(t.cz - cam[2]) < 800) r.add(t.m, this.markModel, { cast: false }); }
-      for (const t of this.land.treeMeshes) { if (Math.abs(t.cx - cam[0]) < 520 && Math.abs(t.cz - cam[2]) < 520) r.add(t.m, this.markModel, { cast: false }); }
+      let built = 0;   // detailed tree cells are built lazily, one per frame; until then the cheap far model stands in
+      for (const t of this.land.treeMeshes) {
+        const dd = Math.max(Math.abs(t.cx - cam[0]), Math.abs(t.cz - cam[2]));
+        if (dd > 480) continue;
+        let m = null;
+        if (dd < 150) { m = t.near; if (!m && built < 1) { m = t.makeNear(); built++; } }
+        if (m) r.add(m, t.model, { cast: true }); else r.add(t.far, t.model, { cast: false });
+      }
     }
     const cx = cam[0], cz = cam[2];
     for (const b of this.boards) if (Math.abs(b.model[14] - cz) < 900) r.add(b.m, b.model, { cast: false });

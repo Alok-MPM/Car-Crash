@@ -47,6 +47,7 @@ export class Renderer {
     this.progs = {
       main: program(gl, S.VS_MAIN, S.FS_MAIN),
       shadow: program(gl, S.VS_SHADOW, S.FS_SHADOW),
+      shadowA: program(gl, S.VS_SHADOW_A, S.FS_SHADOW_A),
       sky: program(gl, S.VS_SKY, S.FS_SKY),
       part: program(gl, S.VS_PART, S.FS_PART),
       decal: program(gl, S.VS_DECAL, S.FS_DECAL),
@@ -266,23 +267,33 @@ export class Renderer {
       gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.colorMask(false, false, false, false);
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(2.5, 4);
       gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
-      const P = this.progs.shadow;
-      gl.useProgram(P.p);
-      gl.uniformMatrix4fv(P.u.uLightVP, false, this.lightVP);
       const lim = R * 1.6;
-      for (const it of this.items) {
-        if (!it.cast) continue;
-        const m = it.model;
-        if (Math.abs(m[12] - tgt[0]) > lim + (it.mesh.radius || 0) || Math.abs(m[14] - tgt[2]) > lim + (it.mesh.radius || 0)) continue;
-        this._relModel(m, rel);
-        gl.uniformMatrix4fv(P.u.uModel, false, rel);
-        gl.bindVertexArray(it.mesh.vao);
-        for (const g of it.mesh.groups) {
-          if (g.mat && (g.mat.kind === 2 || g.mat.kind === 8 || g.mat.noShadow || g.hidden)) continue;
-          if (it.only !== undefined && g.part !== it.only) continue;
-          if (it.hide && it.hide[g.part]) continue;
-          gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, g.start * 4);
+      // pass 0: ordinary casters; pass 1: alpha-cut leaf cards (their own program, both faces, leaf-shaped holes)
+      for (let pass = 0; pass < 2; pass++) {
+        const cut = pass === 1, P = cut ? this.progs.shadowA : this.progs.shadow;
+        gl.useProgram(P.p);
+        gl.uniformMatrix4fv(P.u.uLightVP, false, this.lightVP);
+        if (cut) { gl.disable(gl.CULL_FACE); gl.activeTexture(gl.TEXTURE0); gl.uniform1i(P.u.uTex, 0); }
+        for (const it of this.items) {
+          if (!it.cast) continue;
+          const mesh = it.mesh;
+          if (cut && mesh._cut === undefined) { mesh._cut = false; for (const g of mesh.groups) if (g.mat && g.mat.cut) mesh._cut = true; }
+          if (cut && !mesh._cut) continue;
+          const m = it.model;
+          if (Math.abs(m[12] - tgt[0]) > lim + (mesh.radius || 0) || Math.abs(m[14] - tgt[2]) > lim + (mesh.radius || 0)) continue;
+          this._relModel(m, rel);
+          gl.uniformMatrix4fv(P.u.uModel, false, rel);
+          gl.bindVertexArray(mesh.vao);
+          for (const g of mesh.groups) {
+            if (g.mat && (g.mat.kind === 2 || g.mat.kind === 8 || g.mat.noShadow || g.hidden)) continue;
+            if (!!(g.mat && g.mat.cut) !== cut) continue;
+            if (it.only !== undefined && g.part !== it.only) continue;
+            if (it.hide && it.hide[g.part]) continue;
+            if (cut) gl.bindTexture(gl.TEXTURE_2D, g.mat.tex);
+            gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, g.start * 4);
+          }
         }
+        if (cut) gl.enable(gl.CULL_FACE);
       }
       gl.disable(gl.POLYGON_OFFSET_FILL); gl.cullFace(gl.BACK);
       gl.colorMask(true, true, true, true);

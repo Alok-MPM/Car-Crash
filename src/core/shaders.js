@@ -160,6 +160,7 @@ void main(){
       tx = textureGrad(uTex, auv, dUx * vec2(0.244, -0.244), dUy * vec2(0.244, -0.244));
     } else tx = texture(uTex, vUv);
   }
+  if (uKind == 10 && tx.a < 0.42) discard;   // every leaf is cut out: sky shows through the canopy
 
   if (uKind == 4) {
     float r; albedo = asphalt(vWorldMod * uTexScale, dist, r) * uBase; rough = r; metal = 0.; coat = 0.;
@@ -215,15 +216,19 @@ void main(){
     N = normalize(N + tB * (b0 - bx) * 2.2 * nb);
     rough = 0.95; metal = 0.; coat = 0.;
   } else if (uKind == 10) {
-    // foliage: leaf-cluster speckle, darker underside of the canopy, light glowing through the leaves when looking towards the sun
+    // foliage: alpha-cut leaf cards from the atlas. Double-sided; crown-outward normals light the whole canopy softly; vertex colour carries the canopy
+    // ambient occlusion (dark inside, bright tips); sunlight glows through the leaves (translucency) and the shaded side still gets some transmitted light.
+    N = normalize(vNrm);
     vec3 wl = vWorldMod;
     float lf = vn2(wl.xz * 7. + wl.y * 5.) * 0.6 + vn2(wl.xy * 15. + wl.z * 9.) * 0.4;
     float nl = 1. - smoothstep(10., 70., dist);
-    albedo = uBase * vCol * (1. + (lf - .5) * 0.55 * nl);
-    ao = mix(0.5, 1., smoothstep(-0.7, 0.45, vNrm.y));
-    float back = pow(clamp(dot(viewDir, uSunDir), 0., 1.), 3.);
-    emis += albedo * vec3(0.7, 0.6, 0.12) * back * 0.45;
-    N = normalize(N + vec3(lf - .5, 0., (lf - .5) * 0.7) * 0.25 * nl);
+    albedo = tx.rgb * uBase * vCol * (1. + (lf - .5) * 0.3 * nl);
+    ao = mix(0.55, 1., smoothstep(-0.7, 0.45, N.y));
+    float dayL = smoothstep(0., 0.18, uSunDir.y);
+    float back = pow(max(dot(viewDir, uSunDir), 0.), 2.5);
+    float thru = max(-dot(N, uSunDir), 0.);
+    emis += albedo * (vec3(0.78, 0.7, 0.16) * back * 0.45 + vec3(0.5, 0.62, 0.14) * thru * 0.2) * dayL;
+    N = normalize(N + vec3(lf - .5, 0., (lf - .5) * 0.7) * 0.18 * nl);
     rough = 0.82; metal = 0.; coat = 0.;
   } else if (uKind == 6) {
     // textured standard
@@ -383,6 +388,18 @@ void main(){ gl_Position = uLightVP * (uModel * vec4(aPos, 1.)); }`;
 export const FS_SHADOW = /* glsl */ `#version 300 es
 precision mediump float;
 void main(){}`;
+// alpha-tested shadow for leaf cards: the shadow has the leaf shapes in it
+export const VS_SHADOW_A = /* glsl */ `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=3) in vec2 aUv;
+uniform mat4 uLightVP, uModel;
+out vec2 vUv;
+void main(){ vUv = aUv; gl_Position = uLightVP * (uModel * vec4(aPos, 1.)); }`;
+export const FS_SHADOW_A = /* glsl */ `#version 300 es
+precision mediump float;
+uniform sampler2D uTex;
+in vec2 vUv;
+void main(){ if (texture(uTex, vUv).a < 0.42) discard; }`;
 
 export const VS_SKY = /* glsl */ `#version 300 es
 uniform mat4 uInvVP;

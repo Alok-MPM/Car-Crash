@@ -289,7 +289,7 @@ export class Structures {
     const B = P.B, cracked = P.hp < P.maxHp * 0.55;
     const core = TILE_OF[P.mat] ?? T.rcc;
     // surface character by building style: old / traditional = rough plaster, brick, block; modern + glass = clean smooth white;
-    // luxury (dark) = smooth white walls, with some wall runs in warm wood or crisp concrete
+    // luxury (dark) = clean smooth main walls; warm wood / marble / slate / fluted live only on the feature volumes, fins, louvres, pods and entrance cladding
     const Dz = B.design || {}, fin = B._fin || (B._fin = !Dz.style || Dz.style === 'classic' || Dz.style === 'brick' ? 'rough' : Dz.style === 'dark' ? 'lux' : 'smooth');
     const smooth = fin !== 'rough';
     const pl = cracked ? T.crack : smooth ? T.white : T.plaster;
@@ -307,11 +307,6 @@ export class Structures {
         if (isCore) return [T.rcc, 1, 1, 1];
         if (P.e.parapet || P.e.railing) return [pl, pOut[0], pOut[1], pOut[2]];
         if (!P.out) return [pl, pIn[0], pIn[1], pIn[2]];
-        if (fi === fo && fin === 'lux' && !cracked && P.run != null) {   // accent runs on luxury houses: warm wood and architectural concrete beside the smooth white
-          const h = ((P.run * 2654435761) >>> 0) % 12;
-          if (h < 2) return [T.wood, 1.25, 1.1, 0.95];
-          if (h < 4) return [T.rcc, 1.05, 1.05, 1.05];
-        }
         return fi === fo ? [pl, pOut[0], pOut[1], pOut[2]] : [pl, pIn[0], pIn[1], pIn[2]];
       };
     }
