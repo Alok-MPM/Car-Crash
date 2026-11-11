@@ -14,7 +14,11 @@ function speckle(g, x, y, S, n, a, dark = 80) {
 
 function drawTile(g, x, y, S, t) {
   g.save(); g.beginPath(); g.rect(x, y, S, S); g.clip();
-  if (t === T.plaster || t === T.crack || t === T.white) {
+  if (t === T.white) {
+    // clean modern finish: flat white, only a whisper of grain
+    g.fillStyle = '#f6f5f2'; g.fillRect(x, y, S, S);
+    speckle(g, x, y, S, 80, 0.035, 60);
+  } else if (t === T.plaster || t === T.crack) {
     g.fillStyle = '#f4f2ee'; g.fillRect(x, y, S, S);
     // trowel marks + fine grit
     for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '120,115,105'},${rnd(0.03, 0.08)})`; g.beginPath(); g.ellipse(x + rnd(0, S), y + rnd(0, S), rnd(10, 40), rnd(4, 14), rnd(0, 3), 0, 7); g.fill(); }

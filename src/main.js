@@ -454,7 +454,7 @@ function gotoCity() {
   // start on the main east-west road of the city, driving east
   const bz = P.roads.find((q) => q.type === 'bazaar' && q.axis === 'x'); const z0 = bz ? bz.c + 2.5 : P.cz;
   player.vehicle.reset([P.cx - P.ext + 24, 0, z0], -Math.PI / 2);
-  scene.city.prime([{ x: P.cx - P.ext + 24, z: z0 }, { x: P.cx, z: z0 }], 12);
+  scene.city.prime([{ x: P.cx - P.ext + 24, z: z0 }], 3);   // only the 3 nearest lots are built on the spot, the rest stream in over the next frames
   camYaw = -Math.PI / 2;
   toast('City: roads, lots, parking, farms around. Buildings stream in as you drive', 'City');
 }
@@ -689,7 +689,7 @@ $('nPaint').onclick = () => { const sw = $('swatches'); sw.style.outline = '2px 
 $('nLab').onclick = () => { if (window.openLab) window.openLab(); };
 addEventListener('keydown', (e) => { if (!menuOpen) return; if (e.code === 'ArrowLeft') stepCar(-1); else if (e.code === 'ArrowRight') stepCar(1); else if (e.code === 'Enter') $('go').click(); });
 function toggleMenu() { menuOpen = !menuOpen; $('menu').classList.toggle('hidden', !menuOpen); if (menuOpen) { orbitYaw = camYaw + Math.PI + 0.5; openSheet(null); } }
-$('go').onclick = () => { warmUntil = performance.now() / 1000 + 7; sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
+$('go').onclick = () => { sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
 // HUD buttons fire on pointerdown (not click): a click is dropped while another finger is on the pedals / steering, pointerdown is not
 const tap = (id, fn) => { const el = $(id); el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add('on'); fn(); }); const off = () => el.classList.remove('on'); el.addEventListener('pointerup', off); el.addEventListener('pointercancel', off); el.addEventListener('pointerleave', off); el.addEventListener('click', (e) => e.preventDefault()); };
 {
@@ -704,7 +704,7 @@ tap('bWalk', toggleWalk); tap('bCar', backToCar); tap('bMenu', toggleMenu); tap(
 
 // ---------- frame loop ----------
 const H = 1 / 120;
-let warmUntil = performance.now() / 1000 + 6;
+let warmUntil = 0;   // no start-up lock: the load governor already ignores one-off hitches (dt > 0.09), so detail scales from the first frame
 let acc = 0, last = 0, hudAcc = 0, fpsAvg = 16, lowT = 0, highT = 0;
 let engineT = 0;
 
@@ -749,8 +749,8 @@ function wakeWatchers() {
     const b = c.vehicle ? c.vehicle.body : null; if (!b) continue;
     const vx = b.v[0], vz = b.v[2], sp = Math.hypot(vx, vz);
     if (c !== player && sp < 1 && !c.vehicle.hyperOn) continue;                       // parked traffic stays quiet
-    const k = sp > 1.5 ? 10 / sp : 0;                                                  // 10 m ahead
-    pts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + vx * k, z2: b.pos[2] + vz * k, r: 4 });
+    const k = sp > 1.5 ? Math.min(60, Math.max(3, sp * 0.3)) / sp : 0;                 // the next 0.3 s of path (at least 3 m): buildings wake only when the car is really about to reach them
+    pts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + vx * k, z2: b.pos[2] + vz * k, r: 3 });
     if (c === player) foci.push({ x: b.pos[0], z: b.pos[2], vx, vz });
   }
   if (person.active) { const q = person.body.pos; pts.push({ x: q[0], z: q[2], x2: q[0], z2: q[2], r: 10 }); foci.push({ x: q[0], z: q[2], vx: person.body.v[0], vz: person.body.v[2] }); }

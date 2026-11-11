@@ -136,7 +136,7 @@ export class Scene {
     // ground
     // the world itself is natural ground (soil / dry grass, procedural); tarmac exists only where it was built (proving ground + roads)
     // the ground is cut into 250 m cells: two 24 km triangles give the rasteriser a depth plane that is only good to a few cm, and the thin road/lawn layers 5 mm above it then lose the depth test (tan 'dry' ground showing through the lawns). Pushed back a hair so every layer on top always wins.
-    this.ground = r.createMesh(plane(24000, 24000, 1, 1, 96, 96), { mat: { kind: 7, base: [0.2, 0.2, 0.085], texScale: 1, poly: -1 } });
+    this.ground = r.createMesh(plane(24000, 24000, 1, 1, 96, 96), { mat: { kind: 7, base: [0.2, 0.2, 0.085], texScale: 1, flake: 1, poly: -1 } });
     this.tarmac = [[0, -3000, 52, 6260], [0, -300, 360, 820]].map(([x, z, w, d]) => ({ m: r.createMesh(plane(w, d, 1, 1, Math.max(1, Math.round(w / 120)), Math.max(1, Math.round(d / 120))), { mat: { kind: 4, base: [1, 1, 1], texScale: 1, poly: 1 } }), model: m4.fromTRS(new Float32Array(16), [x === 0 && w === 360 ? 5 : x, 0.003, z], [0, 0, 0, 1], 1) }));
     // markings: one merged mesh (white / yellow)
     const white = new Builder([0, 0, 0]), yellow = new Builder([0, 0, 0]);

@@ -402,6 +402,7 @@ class Contact {
 export class World {
   constructor() {
     this.bodies = [];
+    this.dyn = [];          // the non-fixed bodies only: thousands of fixed building panels are never walked over by step / collide / finish
     this.gravity = -9.81;
     this.ground = new Body({ fixed: true });
     this.groundOn = true;
@@ -421,13 +422,13 @@ export class World {
   add(b) {
     b.finalize(); b._fin = true; b.removed = false;
     this.bodies.push(b);
-    if (b.fixed) this.staticDirty = true;
-    if (b.fixed && b.raycast) this.statics.push(b);
+    if (b.fixed) { this._gridAdd(b); if (b.raycast) this.statics.push(b); } else this.dyn.push(b);
     return b;
   }
   remove(b) {
     b.removed = true;
-    if (b.fixed) this.staticDirty = true;
+    if (b.fixed) this._gridRemove(b);
+    else { const k = this.dyn.indexOf(b); if (k >= 0) this.dyn.splice(k, 1); }
     const i = this.bodies.indexOf(b);
     if (i >= 0) this.bodies.splice(i, 1);
     const j = this.statics.indexOf(b);
@@ -435,14 +436,34 @@ export class World {
   }
   // batch versions: one pass over the body list instead of one search per body (a building has ~1000 panels)
   addMany(list) {
-    for (const b of list) { b.removed = false; if (!b._fin) { b.finalize(); b._fin = true; } this.bodies.push(b); if (b.fixed) { this.staticDirty = true; if (b.raycast) this.statics.push(b); } }
+    for (const b of list) {
+      b.removed = false; if (!b._fin) { b.finalize(); b._fin = true; }
+      this.bodies.push(b);
+      if (b.fixed) { this._gridAdd(b); if (b.raycast) this.statics.push(b); } else this.dyn.push(b);
+    }
   }
   removeMany(list) {
     if (!list.length) return;
     const set = new Set(list);
-    for (const b of list) { b.removed = true; if (b.fixed) this.staticDirty = true; }
+    let nd = 0;
+    for (const b of list) { b.removed = true; if (b.fixed) this._gridRemove(b); else nd++; }
     this.bodies = this.bodies.filter((b) => !set.has(b));
+    if (nd) this.dyn = this.dyn.filter((b) => !set.has(b));
     if (this.statics.length) this.statics = this.statics.filter((b) => !set.has(b));
+  }
+  // the static spatial hash is kept up to date body by body (a building waking or sleeping touches only its own cells, no full rebuild)
+  _gridAdd(b) {
+    const g = this.sgrid; if (!g || this.staticDirty) return;
+    const A = b.aabb, cs = this.cell;
+    const x0 = Math.floor(A[0] / cs), x1 = Math.floor(A[3] / cs), z0 = Math.floor(A[2] / cs), z1 = Math.floor(A[5] / cs);
+    if ((x1 - x0 + 1) * (z1 - z0 + 1) > 400) { b._gr = null; return; }
+    b._gr = [x0, x1, z0, z1];
+    for (let cx = x0; cx <= x1; cx++) for (let cz = z0; cz <= z1; cz++) { const key = cx * 8192 + cz; let l = g.get(key); if (!l) g.set(key, l = []); l.push(b); }
+  }
+  _gridRemove(b) {
+    const g = this.sgrid, r = b._gr; b._gr = null;
+    if (!g || this.staticDirty || !r) return;
+    for (let cx = r[0]; cx <= r[1]; cx++) for (let cz = r[2]; cz <= r[3]; cz++) { const l = g.get(cx * 8192 + cz); if (!l) continue; const k = l.indexOf(b); if (k >= 0) { l[k] = l[l.length - 1]; l.pop(); } }
   }
 
   // highest surface straight below (x, y0, z): ground, fixed pieces, rubble, furniture, cars. Used by the walking person to climb over things.
@@ -549,7 +570,7 @@ export class World {
   }
 
   step(dt) {
-    const bodies = this.bodies, g = this.gravity;
+    const bodies = this.dyn, g = this.gravity;
     this.time += dt;
     const guard = this._guard || (this._guard = []); guard.length = 0;
     // integrate velocities
@@ -587,11 +608,11 @@ export class World {
     for (const b of this.bodies) {
       if (!b.fixed || b.removed) continue;
       const A = b.aabb;
-      b._cx0 = Math.floor(A[0] / cs); b._cx1 = Math.floor(A[3] / cs);
-      b._cz0 = Math.floor(A[2] / cs); b._cz1 = Math.floor(A[5] / cs);
-      if ((b._cx1 - b._cx0 + 1) * (b._cz1 - b._cz0 + 1) > 400) continue;
-      for (let cx = b._cx0; cx <= b._cx1; cx++)
-        for (let cz = b._cz0; cz <= b._cz1; cz++) {
+      const x0 = Math.floor(A[0] / cs), x1 = Math.floor(A[3] / cs), z0 = Math.floor(A[2] / cs), z1 = Math.floor(A[5] / cs);
+      if ((x1 - x0 + 1) * (z1 - z0 + 1) > 400) { b._gr = null; continue; }
+      b._gr = [x0, x1, z0, z1];
+      for (let cx = x0; cx <= x1; cx++)
+        for (let cz = z0; cz <= z1; cz++) {
           const key = cx * 8192 + cz;
           let l = g.get(key);
           if (!l) { l = []; g.set(key, l); }
@@ -613,12 +634,13 @@ export class World {
     b.sleeping = false;
     b.sleepT = 0;
     b._nw = true;        // its cached contact impulses were for an immovable wall: warm-starting them on a light free body shoots it out at kilometres per second
-    this.staticDirty = true;
+    this._gridRemove(b);
+    if (!b.removed) this.dyn.push(b);
   }
 
   collide() {
     this.nc = 0;
-    const cs = this.cell, bodies = this.bodies;
+    const cs = this.cell, bodies = this.dyn;
     if (this.staticDirty || !this.sgrid) this.buildStaticGrid();
     const sgrid = this.sgrid;
     const grid = new Map();
@@ -911,7 +933,7 @@ export class World {
       }
     }
     // integrate positions
-    for (const b of this.bodies) {
+    for (const b of this.dyn) {
       if (b.fixed || b.sleeping) continue;
       // velocity sanity clamps (no CCD, keep things from tunnelling / blowing up)
       const vm = b.vmax || (b.group === GROUP.CAR ? 160 : 55), wm = b.group === GROUP.CAR ? 40 : 28;

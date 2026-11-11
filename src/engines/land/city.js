@@ -3,7 +3,7 @@
 import { ROADS, GROUND, CROPS, TREES, TREE_SETS, PARKING, LAYERS, ROAD_LAYERS, ASPHALT_TINT, FURNITURE } from '../../data/land.js';
 import { RECIPES } from '../../data/recipes.js';
 import { Builder, M } from '../cars/carmodel.js';
-import { rbox, cylinder } from '../../core/geo.js';
+import { rbox, cylinder, sphere } from '../../core/geo.js';
 import { mulberry32, m4, segHitsRect } from '../../core/math.js';
 import { GeoBuf, T, hexRGB } from '../buildings/render.js';
 import { PALETTES } from '../buildings/catalog.js';
@@ -14,7 +14,7 @@ const hash = (a, b, c = 0) => (Math.imul(a | 0, 73856093) ^ Math.imul(b | 0, 193
 // ---------------------------------------------------------------- planning (pure data, no rendering)
 export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 100, farmR = 700 } = {}) {
   const rnd = mulberry32(seed);
-  const roads = [], lots = [], pads = [], lawns = [], fields = [], trees = [], plots = [], chowks = [], ponds = [];
+  const roads = [], lots = [], pads = [], lawns = [], walks = [], fields = [], trees = [], plots = [], chowks = [], ponds = [];
   const R = (type, axis, c, a0, a1) => roads.push({ type, axis, c, a0, a1, w: ROADS[type].w });
   const ext = half * pitch + 8;
   // ---- Indian-style fabric: an old dense core (irregular bazaar + galis) around a chowk with the mandir, planned colonies outside it.
@@ -70,12 +70,13 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
       // ---- plot rules (engine): colonies get real plots - road setback 6-9 m, 6-10 m between houses, 16-24 m round towers / big villas / markets,
       //      a front lawn, a driveway to a parking pad, a back garden and trees round the plot. The old core stays tight (shops share walls, galis are narrow).
       const colony = !old && er.type === 'city';
+      const lux = colony && (['villa', 'podHouse', 'louvreHouse', 'woodHouse'].includes(showName) || brief.style === 'dark');   // luxury plots get a designed garden
       const big = brief.kind === 'tower' || showName === 'villa' || showName === 'market' || showName === 'tower' || (brief.w || 0) >= 15;
-      const setback = colony ? (big ? 8 + rnd() * 2 : 6 + rnd() * 3) : baseSet;
+      const setback = colony ? (big ? 11 + rnd() * 3 : 9 + rnd() * 3) : baseSet;   // colonies sit well back from the road: room for a lawn, a driveway and a path, and a gap between the street and the façade
       const zFront = zr - rw / 2 - fpw - setback - (er.type === 'bazaar' ? 2 : 0);
       const wantPad = colony;
       const padW = wantPad ? (brief.kind === 'tower' ? 8.6 : big ? 5.8 : brief.garage ? 5.8 : 3.4) : 0;
-      const gap = colony ? (big ? 16 + rnd() * 8 : 6 + rnd() * 4) : old ? 0.45 + rnd() * 0.9 : 1.6;
+      const gap = colony ? (big ? 20 + rnd() * 8 : lux ? 8 + rnd() * 4 : 6 + rnd() * 4) : old ? 0.45 + rnd() * 0.9 : 1.6;
       const bw = brief.w || 12, bd = brief.d || 10;
       const lotW = bw + padW + gap;
       if (x + lotW > xEnd) { x = (nextCut ? nextCut[1] : xEndAll) + 0.5; continue; }
@@ -93,12 +94,22 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
       if (colony) {
         lawns.push({ x0: x + 0.4, x1: x + lotW - 0.4, z0: zFront - bd - 5, z1: zr - rw / 2 - fpw - 0.3 });
         // trees round the plot: big crowns on the front lawn (clear of the façade, the path and the driveway), narrow ones in the side gaps, shrubs at the façade
-        const free = (tx) => !(padR && tx > padR[0] - 1.4 && tx < padR[1] + 1.4) && Math.abs(tx - bx) > 2.4;
-        const nFront = big ? 4 + Math.floor(rnd() * 3) : 2 + Math.floor(rnd() * 2);
+        const free = (tx) => !(padR && tx > padR[0] - 1.4 && tx < padR[1] + 1.4) && Math.abs(tx - bx) > (lux ? bw / 2 + 0.8 : 2.4);   // luxury: feature trees stand beside the façade, never in front of it
+        const nFront = lux ? 1 + Math.floor(rnd() * 2) : big ? 4 + Math.floor(rnd() * 3) : 2 + Math.floor(rnd() * 2);
         for (let t = 0, g = 0; t < nFront && g < 40; g++) { const tx = x + 1.5 + rnd() * (lotW - 3), tz = zFront + 4.5 + rnd() * Math.max(1, zr - rw / 2 - fpw - zFront - 6.5); if (!free(tx)) continue; trees.push({ x: tx, z: tz, set: big ? 'frontBig' : 'front', s: rnd(), s2: rnd(), s3: rnd() }); t++; }
         for (let t = 0; t < (big ? 4 : 2); t++) trees.push({ x: x + (t % 2 ? lotW - gap / 4 : gap / 4), z: zFront - bd * (0.1 + rnd() * 0.8), set: 'side', s: rnd(), s2: rnd(), s3: rnd() });
         for (let t = 0; t < (big ? 3 : 2); t++) trees.push({ x: x + 2 + rnd() * (lotW - 4), z: zFront - bd - 1.5 - rnd() * 3, set: big ? 'frontBig' : 'front', s: rnd(), s2: rnd(), s3: rnd() });   // back garden
         for (const sx of [-1, 1]) for (let t = 0; t < (big ? 3 : 1); t++) { const tx = bx + sx * (bw / 2 - 0.6 - t * (bw / 4)); if (free(tx) || Math.abs(tx - bx) > 3) trees.push({ x: tx, z: zFront + 0.9, set: 'shrub', s: rnd(), s2: rnd(), s3: rnd() }); }
+        // luxury garden: low border shrubs along the outer thirds of the façade (the middle stays clear for the door and its path)
+        if (lux) for (const sx of [-1, 1]) for (let t = bw * 0.28; t < bw / 2 - 0.5; t += 1.7) trees.push({ x: bx + sx * t, z: zFront + 0.8 + rnd() * 0.4, set: 'shrub', s: rnd(), s2: rnd(), s3: rnd() });
+        // big plots and towers: a proper compound - paved walk down the free side and across the back, trees along the boundary
+        if (big) {
+          const side = padLeft ? 1 : -1, wx0 = side > 0 ? bx + bw / 2 + 2.2 : bx - bw / 2 - 3.8;
+          walks.push([wx0, zFront - bd - 2.6, wx0 + 1.6, zFront + 2.5]);
+          walks.push([x + 1.6, zFront - bd - 2.6, x + lotW - 1.6, zFront - bd - 1.0]);
+          for (let tz = zFront - 2; tz > zFront - bd - 3; tz -= 6) for (const tx of [x + 1.2, x + lotW - 1.2]) trees.push({ x: tx, z: tz, set: 'side', s: rnd(), s2: rnd(), s3: rnd() });
+          for (let tx = x + 4; tx < x + lotW - 3; tx += 7) trees.push({ x: tx, z: zFront - bd - 4.2, set: 'frontBig', s: rnd(), s2: rnd(), s3: rnd() });
+        }
       }
       x += lotW;
     }
@@ -157,7 +168,7 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
   for (let i = trees.length - 1; i >= 0; i--) { const t = trees[i]; if (ponds.some((p) => ((t.x - p.x) / (p.rx + 2)) ** 2 + ((t.z - p.z) / (p.rz + 2)) ** 2 < 1 && t.set !== 'village')) trees.splice(i, 1); }
   const roadAt = (x, z) => { let best = null; for (const r of roads) if (r.axis === 'x' ? Math.abs(z - r.c) < r.w / 2 && x > r.a0 && x < r.a1 : Math.abs(x - r.c) < r.w / 2 && z > r.a0 && z < r.a1) { if (!best || r.w > best.w) best = r; } return best ? best.type : null; };
   const paved = (x, z) => (Math.abs(x) < 26 && z < 100 && z > -6130) || (x > -175 && x < 185 && z > -700 && z < 110);
-  return { seed, cx, cz, half, pitch, ext, roads, lots, pads, lawns, plots, fields, trees, chowks, ponds, onRoad, roadAt, paved, showcase: lots.filter((l) => l.show) };
+  return { seed, cx, cz, half, pitch, ext, roads, lots, pads, lawns, walks, plots, fields, trees, chowks, ponds, onRoad, roadAt, paved, showcase: lots.filter((l) => l.show) };
 }
 
 // ---------------------------------------------------------------- land meshes (roads, markings, fields, trees)
@@ -168,38 +179,87 @@ const P = {}; let _n = 0; for (const k of ['dry', 'grass', 'soil', 'plough', 'wh
 const TINT = (c, m) => c.map((v) => v * m);
 const MATS = () => ({
   [P.dry]: { kind: 7, base: GROUND.grassDry.color, texScale: 1 },
-  [P.grass]: { kind: 7, base: GROUND.grass.color, texScale: 1, poly: 1 },
-  [P.soil]: { kind: 7, base: GROUND.soil.color, texScale: 1, poly: 1 },
-  [P.embank]: { kind: 7, base: GROUND.embank.color, texScale: 1, poly: 2 },
-  [P.plough]: { kind: 7, base: GROUND.plough.color, texScale: 1, poly: 1 },
+  [P.grass]: { kind: 7, flake: 1, base: GROUND.grass.color, texScale: 1, poly: 1 },
+  [P.soil]: { kind: 7, flake: 2, base: GROUND.soil.color, texScale: 1, poly: 1 },
+  [P.embank]: { kind: 7, flake: 2, base: GROUND.embank.color, texScale: 1, poly: 2 },
+  [P.plough]: { kind: 7, flake: 2, base: GROUND.plough.color, texScale: 1, poly: 1 },
   [P.wheat]: { kind: 7, base: GROUND.wheat.color, texScale: 1, poly: 1 },
   [P.paddy]: { kind: 7, base: GROUND.paddy.color, texScale: 1, poly: 1 },
   [P.mustard]: { kind: 7, base: GROUND.mustard.color, texScale: 1, poly: 1 },
-  [P.rowDark]: { kind: 7, base: TINT(GROUND.soil.color, 0.7), texScale: 1, poly: 2 },
+  [P.rowDark]: { kind: 7, flake: 2, base: TINT(GROUND.soil.color, 0.7), texScale: 1, poly: 2 },
   [P.rowLight]: { kind: 7, base: TINT(GROUND.wheat.color, 1.25), texScale: 1, poly: 2 },
-  [P.paver]: { kind: 7, base: GROUND.paver.color, texScale: 4, poly: 3 },
-  [P.footpath]: { kind: 7, base: GROUND.footpath.color, texScale: 4, poly: 3 },
-  [P.chowk]: { kind: 7, base: GROUND.chowk.color, texScale: 3, poly: 3 },
+  [P.paver]: { kind: 7, flake: 3, base: GROUND.paver.color, texScale: 4, poly: 3 },
+  [P.footpath]: { kind: 7, flake: 3, base: GROUND.footpath.color, texScale: 4, poly: 3 },
+  [P.chowk]: { kind: 7, flake: 3, base: GROUND.chowk.color, texScale: 3, poly: 3 },
   [P.water]: { kind: 0, base: GROUND.water.color, rough: 0.12, metal: 0.1, poly: 3 },
   [P.rBC]: { kind: 4, base: [ASPHALT_TINT.city, ASPHALT_TINT.city, ASPHALT_TINT.city], texScale: 1, poly: 4 },
   [P.rBazaar]: { kind: 4, base: [ASPHALT_TINT.bazaar, ASPHALT_TINT.bazaar, ASPHALT_TINT.bazaar], texScale: 1.3, poly: 4 },
   [P.rGali]: { kind: 4, base: [ASPHALT_TINT.gali, ASPHALT_TINT.gali * 0.96, ASPHALT_TINT.gali * 0.9], texScale: 1.6, poly: 4 },
   [P.rVillage]: { kind: 4, base: [ASPHALT_TINT.village, ASPHALT_TINT.village * 0.95, ASPHALT_TINT.village * 0.88], texScale: 1.6, poly: 4 },
-  [P.rOff]: { kind: 7, base: ROADS.offroad.color, texScale: 3, poly: 4 },
-  [P.rut]: { kind: 7, base: TINT(ROADS.offroad.color, 0.6), texScale: 5, poly: 5 },
+  [P.rOff]: { kind: 7, flake: 2, base: ROADS.offroad.color, texScale: 3, poly: 4 },
+  [P.rut]: { kind: 7, flake: 2, base: TINT(ROADS.offroad.color, 0.6), texScale: 5, poly: 5 },
   [P.shoulder]: { kind: 4, base: [1.7, 1.7, 1.7], texScale: 1, poly: 5 },
   [P.kerb]: { kind: 7, base: GROUND.curb.color, texScale: 6, poly: 6 },
   [P.kerbBlack]: { kind: 0, base: [0.05, 0.05, 0.05], rough: 0.8, poly: 7 },
   [P.median]: { kind: 7, base: [0.1, 0.2, 0.06], texScale: 1, poly: 6 },
   [P.white]: { kind: 0, base: GROUND.white.color, rough: 0.7, poly: 7 },
   [P.yellow]: { kind: 0, base: GROUND.yellow.color, rough: 0.7, poly: 7 },
-  [P.trunk]: { kind: 0, base: [0.18, 0.12, 0.07], rough: 0.95 },
-  [P.leafA]: { kind: 0, base: [0.14, 0.28, 0.09], rough: 0.9 },
+  [P.trunk]: { kind: 9, base: [0.18, 0.12, 0.07], rough: 0.95 },
+  [P.leafA]: { kind: 10, base: [0.14, 0.28, 0.09], rough: 0.9 },
   [P.steel]: { kind: 0, base: [0.62, 0.64, 0.66], metal: 0.8, rough: 0.35 },
   [P.pole]: { kind: 0, base: [0.45, 0.47, 0.5], metal: 0.6, rough: 0.5 },
   [P.sign]: { kind: 0, base: [0.02, 0.28, 0.12], rough: 0.5 },
   [P.signW]: { kind: 0, base: [0.85, 0.85, 0.85], rough: 0.5 },
 });
+
+// ---------------------------------------------------------------- organic trees (low-poly but irregular: tapered trunk, limbs, overlapping foliage clusters)
+const BLOB4 = sphere(1, 4), BLOB3 = sphere(1, 3);
+const scaleM = (sx, sy, sz) => new Float32Array([sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, sz, 0, 0, 0, 0, 1]);
+const lim = (b, x, y, z, az, tilt, len, r0, r1) => b.addGeo(cylinder(r1, r0, len, 5), 'paint', P.trunk, M.mmul(M.tr(x, y, z), M.mmul(M.rotY(az), M.mmul(M.rotZ(-tilt), M.tr(0, len / 2, 0)))));
+function addTree(b, sp, t, h, cr, col) {
+  const rn = mulberry32(Math.floor((t.s * 7919 + t.s2 * 104729 + t.s3 * 1299709) * 1000) + 1);
+  const shade = () => { const k = 0.82 + rn() * 0.36, o = rn() * 0.18 - 0.06; return [col[0] * k * (1 + o), col[1] * k, col[2] * k * (1 - o)]; };
+  const blob = (g, x, y, z, rx, ry, rz, az) => b.addGeo(g, 'paint', P.leafA, M.mmul(M.tr(x, y, z), M.mmul(M.rotY(az), scaleM(rx, ry, rz))), shade());
+  if (sp.kind === 'palm') {
+    // gently curved ringed trunk in four leaning segments, a crown of arched fronds
+    const lean = (rn() - 0.5) * 0.5, az0 = rn() * 6.28; let px = t.x, py = 0, pz = t.z; const seg = h / 4;
+    for (let i = 0; i < 4; i++) {
+      const tl = lean * (0.35 + i * 0.3), r0 = sp.trunk * (1 - i * 0.09), r1 = sp.trunk * (1 - (i + 1) * 0.09);
+      lim(b, px, py, pz, az0, tl, seg * 1.04, r0, r1);
+      px += Math.sin(tl) * Math.cos(az0) * seg; pz -= Math.sin(tl) * Math.sin(az0) * seg; py += Math.cos(tl) * seg;
+    }
+    for (let i = 0; i < 8; i++) { const az = (i / 8) * 6.28 + rn() * 0.4, d = cr * (0.75 + rn() * 0.3); blob(BLOB3, px + Math.cos(az) * d * 0.55, py + 0.15 - d * 0.12, pz - Math.sin(az) * d * 0.55, d * 0.62, 0.09, d * 0.2, az); }
+    blob(BLOB3, px, py + 0.2, pz, cr * 0.28, cr * 0.2, cr * 0.28, 0);
+    return;
+  }
+  if (sp.kind === 'conifer') {
+    // tall tiered ashoka: trunk base showing, four tapering tiers that are slightly off-centre and uneven
+    const tb = h * 0.2; lim(b, t.x, 0, t.z, 0, 0, h * 0.5, sp.trunk, sp.trunk * 0.5);
+    for (let i = 0; i < 4; i++) { const rr = cr * (1.2 - i * 0.24) * (0.92 + rn() * 0.18), hh = h * 0.3, y = tb + i * h * 0.19 + hh * 0.5; b.addGeo(cylinder(0.04, rr, hh, 8), 'paint', P.leafA, M.mmul(M.tr(t.x + (rn() - 0.5) * cr * 0.18, y, t.z + (rn() - 0.5) * cr * 0.18), M.rotY(rn() * 6.28)), shade()); }
+    return;
+  }
+  if (sp.trunk < 0.06) {   // shrub: low overlapping puffs
+    const n = 3 + (rn() > 0.5 ? 1 : 0);
+    for (let i = 0; i < n; i++) { const a = rn() * 6.28, d = cr * 0.45 * rn(), r = cr * (0.55 + rn() * 0.3); blob(BLOB3, t.x + Math.cos(a) * d, r * 0.62 + rn() * 0.08, t.z + Math.sin(a) * d, r, r * 0.78, r, rn() * 6.28); }
+    return;
+  }
+  // broad tree: tapered trunk, 3-4 angled limbs, asymmetric crown of 4-7 overlapping foliage clusters
+  const ht = h * 0.5, r0 = sp.trunk;
+  lim(b, t.x, 0, t.z, 0, 0, ht, r0, r0 * 0.55);
+  const nl = 3 + (rn() > 0.5 ? 1 : 0), a0 = rn() * 6.28, tops = [];
+  for (let i = 0; i < nl; i++) {
+    const az = a0 + (i / nl) * 6.28 + (rn() - 0.5) * 0.7, tilt = 0.5 + rn() * 0.4, len = cr * (0.7 + rn() * 0.3), y0 = ht * (0.78 + rn() * 0.2);
+    lim(b, t.x, y0, t.z, az, tilt, len, r0 * 0.38, r0 * 0.14);
+    tops.push([t.x + Math.sin(tilt) * Math.cos(az) * len, y0 + Math.cos(tilt) * len, t.z - Math.sin(tilt) * Math.sin(az) * len]);
+  }
+  const nc = cr < 2 ? 4 : cr < 3.2 ? 5 : 7, cy = ht + cr * 0.55, skew = [(rn() - 0.5) * cr * 0.4, (rn() - 0.5) * cr * 0.4];
+  for (let i = 0; i < nc; i++) {
+    const tp = i < tops.length ? tops[i] : null, a = rn() * 6.28, d = cr * (0.15 + rn() * 0.5);
+    const x = tp ? tp[0] * 0.8 + t.x * 0.2 : t.x + Math.cos(a) * d + skew[0], z = tp ? tp[2] * 0.8 + t.z * 0.2 : t.z - Math.sin(a) * d + skew[1], y = tp ? tp[1] + cr * 0.1 : cy + (rn() - 0.35) * cr * 0.55;
+    const r = cr * (0.5 + rn() * 0.38);
+    blob(BLOB4, x, y, z, r, r * (0.68 + rn() * 0.15), r * (0.9 + rn() * 0.2), rn() * 6.28);
+  }
+}
 
 export function buildLand(r, plan) {
   const parts = {}; const Bd = (k) => parts[k] || (parts[k] = new Builder([0, 0, 0]));
@@ -284,6 +344,7 @@ export function buildLand(r, plan) {
     for (let rw2 = 0; rw2 < (p.rows || 1); rw2++) for (let b = 0; b <= p.bays; b++) Q('lot', P.white, p.x0 + b * bw - 0.05, p.z0 + rw2 * rowD + 0.4, p.x0 + b * bw + 0.05, p.z0 + (rw2 + 1) * rowD - 0.8);
   }
   for (const l of plan.lawns) Q('lot', P.grass, l.x0, l.z0, l.x1, l.z1);
+  for (const w of plan.walks) Q('lot', P.paver, w[0], w[1], w[2], w[3]);
 
   const PM = MATS(), meshes = [];
   const furMeshes = [];
@@ -301,10 +362,7 @@ export function buildLand(r, plan) {
     let c = cell.get(key); if (!c) { c = { b: new Builder([0, 0, 0]), cx: (Math.floor(t.x / 240) + 0.5) * 240, cz: (Math.floor(t.z / 240) + 0.5) * 240 }; cell.set(key, c); }
     const h = sp.h[0] + t.s2 * (sp.h[1] - sp.h[0]), cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]), la = sp.leaf[t.s3 > 0.5 ? 1 : 0];
     const col = [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09];
-    if (sp.kind === 'palm') { c.b.addGeo(cylinder(sp.trunk * 0.7, sp.trunk, h * 0.9, 6), 'paint', P.trunk, M.tr(t.x, h * 0.45, t.z)); c.b.addGeo(rbox(cr, cr * 0.28, cr, cr * 0.3, 2), 'paint', P.leafA, M.tr(t.x, h * 0.92, t.z), col); continue; }
-    c.b.addGeo(cylinder(sp.trunk * 0.7, sp.trunk, h * 0.55, 6), 'paint', P.trunk, M.tr(t.x, h * 0.275, t.z));
-    if (sp.kind === 'broad') c.b.addGeo(rbox(cr, cr * 0.75, cr, cr * 0.8, 2), 'paint', P.leafA, M.tr(t.x, h * 0.55 + cr * 0.55, t.z), col);
-    else for (let i = 0; i < 3; i++) c.b.addGeo(cylinder(0.05, cr * (1.15 - i * 0.28), h * 0.34, 7), 'paint', P.leafA, M.tr(t.x, h * (0.34 + i * 0.22) + h * 0.17, t.z), col);
+    addTree(c.b, sp, t, h, cr, col);
   }
   const treeMeshes = [];
   for (const c of cell.values()) { const f = c.b.finish(); f.groups.forEach((g) => { g.mat = PM[g.part]; }); treeMeshes.push({ m: r.createMesh(f.geo, { groups: f.groups, radius: 220 }), cx: c.cx, cz: c.cz }); }
@@ -413,14 +471,14 @@ export class CityStreamer {
     const P = this.plan, S = this.S, t0 = performance.now();
     if (!foci.length) return;
     let spMax = 0; for (const q of foci) spMax = Math.max(spMax, Math.hypot(q.vx, q.vz));
-    // NOW: lots on a collision course are built immediately (the path of the next ~0.7 s, at least 40 m)
+    // NOW: a lot is built in one go only when the car is about to reach it: the path of the next 0.3 s, at least 10 m. Anything further is streamed over frames.
     for (const q of foci) {
       const sp = Math.hypot(q.vx, q.vz); if (sp < 3) continue;
-      const k = Math.max(40, sp * 0.7) / sp, x2 = q.x + q.vx * k, z2 = q.z + q.vz * k;
+      const k = Math.max(10, sp * 0.3) / sp, x2 = q.x + q.vx * k, z2 = q.z + q.vz * k;
       for (const l of P.lots) if (!l.B && !l.dead && segHitsRect(q.x, q.z, x2, z2, l.x - l.w / 2 - 2, l.z - l.d / 2 - 2, l.x + l.w / 2 + 2, l.z + l.d / 2 + 2, 3.5)) this.buildNow(l);
     }
     // REAL: nearest-to-reach first, inside a per-frame time budget (a building is spread over several frames)
-    const budget = spMax > 30 ? 9 : 5;
+    const budget = 2.2;                                    // ms per frame for streaming (a building is spread over many frames)
     let guard = 0;
     while (performance.now() - t0 < budget && guard++ < 60) {
       if (!this.job) {

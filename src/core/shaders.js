@@ -86,6 +86,13 @@ uniform int uNL;
 uniform float uDbg;
 ${COMMON_ENV}
 
+// ground surface relief (height of the tiny 3D detail): class 1 lawn (blades, tufts), 2 soil / mud (clods, furrows), 3 pavers (joints)
+float relief(vec2 gp, float cls){
+  if (cls < 1.5) return vn2(gp * 55.) * 0.5 + vn2(vec2(gp.x * 95., gp.y * 15.)) * 0.35 + vn2(gp * 9.) * 0.15;
+  if (cls < 2.5) return vn2(gp * 3.2) * 0.55 + vn2(gp * 11.) * 0.3 + vn2(vec2(gp.x * 30., gp.y * 2.4)) * 0.15;
+  vec2 pj = abs(fract(gp * 0.8) - .5);
+  return -smoothstep(.45, .5, max(pj.x, pj.y)) + vn2(gp * 24.) * 0.12;
+}
 float shadowPCF(vec4 sc){
   vec3 p = sc.xyz / sc.w * 0.5 + 0.5;
   if (p.z >= 1. || p.x <= 0. || p.x >= 1. || p.y <= 0. || p.y >= 1.) return 1.;
@@ -183,6 +190,41 @@ void main(){
     float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3 + 0.12*(n5-.5)*f3;
     albedo = uBase * vCol * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
     rough = 0.97; metal = 0.; coat = 0.;
+    // real 3D relief up close (fades out with distance): lawn blades and tufts, soil clods and furrows with damp glossy patches, paver joints
+    float rl = 1. - smoothstep(4., 45., dist);
+    if (uFlake > 0.5 && rl > 0.01) {
+      float h0 = relief(gp, uFlake), e = 0.004;
+      float hx = relief(gp + vec2(e, 0.), uFlake), hz = relief(gp + vec2(0., e), uFlake);
+      float amp = uFlake < 1.5 ? 0.9 : uFlake < 2.5 ? 1.5 : 1.2;
+      N = normalize(N + vec3(h0 - hx, 0., h0 - hz) * amp * rl * 3.);
+      if (uFlake < 1.5) { albedo *= 1. + (h0 - .5) * 0.28 * rl; }
+      else if (uFlake < 2.5) {
+        float damp = smoothstep(.5, .75, vn2(gp * 0.16 + 4.));
+        albedo *= (0.82 + 0.36 * h0) * mix(1., 0.72, damp * rl);
+        rough = mix(0.9, 0.68, damp);
+      } else { albedo *= 1. - 0.3 * smoothstep(.45, .5, max(abs(fract(gp * 0.8).x - .5), abs(fract(gp * 0.8).y - .5))) * rl; }
+    }
+  } else if (uKind == 9) {
+    // bark: vertical fissures and ridges, a little darker in the cracks
+    vec3 wb = vWorldMod; float bu = (wb.x + wb.z) * 38.;
+    float b0 = vn2(vec2(bu, wb.y * 3.2)) * 0.6 + vn2(vec2(bu * 2.3, wb.y * 7.)) * 0.4;
+    float nb = 1. - smoothstep(6., 50., dist);
+    albedo = uBase * vCol * (0.7 + 0.6 * b0 * (0.4 + 0.6 * nb) + 0.3 * (1. - nb) * 0.5);
+    vec3 tB = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
+    float bx = vn2(vec2(bu + 0.02 * 38., wb.y * 3.2)) * 0.6 + vn2(vec2((bu + 0.02 * 38.) * 2.3, wb.y * 7.)) * 0.4;
+    N = normalize(N + tB * (b0 - bx) * 2.2 * nb);
+    rough = 0.95; metal = 0.; coat = 0.;
+  } else if (uKind == 10) {
+    // foliage: leaf-cluster speckle, darker underside of the canopy, light glowing through the leaves when looking towards the sun
+    vec3 wl = vWorldMod;
+    float lf = vn2(wl.xz * 7. + wl.y * 5.) * 0.6 + vn2(wl.xy * 15. + wl.z * 9.) * 0.4;
+    float nl = 1. - smoothstep(10., 70., dist);
+    albedo = uBase * vCol * (1. + (lf - .5) * 0.55 * nl);
+    ao = mix(0.5, 1., smoothstep(-0.7, 0.45, vNrm.y));
+    float back = pow(clamp(dot(viewDir, uSunDir), 0., 1.), 3.);
+    emis += albedo * vec3(0.7, 0.6, 0.12) * back * 0.45;
+    N = normalize(N + vec3(lf - .5, 0., (lf - .5) * 0.7) * 0.25 * nl);
+    rough = 0.82; metal = 0.; coat = 0.;
   } else if (uKind == 6) {
     // textured standard
     albedo = tx.rgb * uBase * vCol;
@@ -193,6 +235,18 @@ void main(){
     else if (cell.x == 3. && cell.y == 3.) { metal = 0.9; rough = 0.25; }
     else if (cell.x == 0. && cell.y == 3.) { metal = 0.0; rough = 0.16; coat = 0.0; }
     else if (cell.x == 2. && cell.y == 3.) { rough = 0.45; }
+    else if (cell.x == 3. && cell.y == 2.) {
+      // clean modern finish (painted white / smooth render): satin, almost no bump, no grime streaks, only a very faint tonal breath
+      rough = 0.35;
+      float nr2 = 1. - smoothstep(4., 28., dist);
+      vec3 wp2 = vWorldMod;
+      vec2 sp2 = abs(vNrm.y) > 0.7 ? wp2.xz : vec2(wp2.x * abs(vNrm.z) + wp2.z * abs(vNrm.x), wp2.y);
+      float h1 = vn2(sp2 * 46.);
+      albedo *= 1. + 0.008 * (h1 - .5) * nr2;
+      float e2 = 0.0035, hx2 = vn2((sp2 + vec2(e2, 0.)) * 46.), hy2 = vn2((sp2 + vec2(0., e2)) * 46.);
+      vec3 tN2 = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
+      N = normalize(N + (tN2 * (h1 - hx2) + vec3(0., 1., 0.) * (h1 - hy2)) * 0.03 * nr2);
+    }
     else {
       // paint / plaster / brick / concrete: real surface character. Roller-coat grain and roughcast bumps close up, soft blotches and long vertical
       // weathering streaks at mid range, so a wall never looks like a flat colour fill.
@@ -200,7 +254,9 @@ void main(){
       vec2 sp = abs(vNrm.y) > 0.7 ? wp.xz : vec2(wp.x * abs(vNrm.z) + wp.z * abs(vNrm.x), wp.y);
       float nr = 1. - smoothstep(4., 28., dist), md = 1. - smoothstep(25., 130., dist);
       float g1 = vn2(sp * 46.), g2 = vn2(sp * 9.), g3 = vn2(vec2(sp.x * 1.6, sp.y * 0.2));
-      albedo *= 1. + 0.02 * (g1 - .5) * nr + 0.06 * (g2 - .5) * md - 0.12 * (g3 - .45) * md;
+      // old walls are not all equally grimy: a slow patchwork (per ~9 m of wall) decides how much staining a stretch carries
+      float wv = mix(0.3, 1., smoothstep(.3, .7, vn2(vec2(wp.x * 0.11 + wp.z * 0.17, wp.y * 0.07 + 3.1))));
+      albedo *= 1. + 0.02 * (g1 - .5) * nr + (0.06 * (g2 - .5) * md - 0.12 * (g3 - .45) * md) * wv;
       vec3 tN = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
       float e = 0.0035, hx = vn2((sp + vec2(e, 0.)) * 46.), hy = vn2((sp + vec2(0., e)) * 46.);
       N = normalize(N + (tN * (g1 - hx) + vec3(0., 1., 0.) * (g1 - hy)) * 0.45 * nr);
