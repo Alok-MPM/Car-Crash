@@ -1,0 +1,26 @@
+name: Unpack zip
+on:
+  push:
+    paths:
+      - '*.zip'
+permissions:
+  contents: write
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip and commit
+        run: |
+          shopt -s nullglob
+          zips=(*.zip)
+          [ ${#zips[@]} -eq 0 ] && exit 0
+          for z in "${zips[@]}"; do
+            unzip -o "$z"
+            git rm -f --quiet "$z"
+          done
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git add -A
+          git commit -m "Update from zip" || exit 0
+          git push
