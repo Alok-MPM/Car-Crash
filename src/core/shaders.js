@@ -53,13 +53,22 @@ layout(location=3) in vec2 aUv;
 layout(location=4) in float aTile;
 uniform mat4 uVP, uModel, uLightVP;
 uniform vec3 uEyeMod;
-uniform float uNBias;
+uniform float uNBias, uTime, uSway;
 out vec3 vPosRel, vNrm, vCol, vWorldMod, vLocal;
 out vec2 vUv;
 flat out float vTile;
 out vec4 vShadow;
 void main(){
   vec4 p = uModel * vec4(aPos, 1.);
+  if (uSway > 0.) {
+    // wind on foliage meshes: the crown leans and eases with slow gusts (more with height), every leaf card also flutters a little. A few cm to ~15 cm, vertex shader only.
+    vec3 wp = p.xyz + uEyeMod;
+    float hh = max(aPos.y, 0.);
+    float gust = sin(uTime * 1.25 + wp.x * 0.11 + wp.z * 0.09) * 0.6 + sin(uTime * 2.3 + wp.x * 0.23) * 0.4;
+    float lean = 0.0016 * hh * hh * gust;
+    float fl = sin(uTime * 6.5 + wp.x * 2.9 + wp.z * 3.7 + wp.y * 2.3);
+    p.x += lean + fl * 0.014; p.z += lean * 0.6 + fl * 0.01; p.y += fl * 0.008;
+  }
   vec3 n = normalize(mat3(uModel) * aNrm);
   vPosRel = p.xyz; vNrm = n; vCol = aCol; vUv = aUv; vLocal = aPos; vTile = aTile;
   vWorldMod = p.xyz + uEyeMod;
@@ -81,6 +90,7 @@ uniform float uShadowTexel, uShadowOn;
 uniform int uKind;
 uniform vec3 uBase, uEmis;
 uniform float uMetal, uRough, uCoat, uAlpha, uTexOn, uTexScale, uFlake;
+uniform float uNear2;   // kind 11 (tree pictures): squared radius around the eye inside which pictures are hidden because the real 3D tree is drawn
 uniform vec4 uLP[4], uLD[4], uLC[4];
 uniform int uNL;
 uniform float uDbg;
@@ -88,8 +98,13 @@ ${COMMON_ENV}
 
 // ground surface relief (height of the tiny 3D detail): class 1 lawn (blades, tufts), 2 soil / mud (clods, furrows), 3 pavers (joints)
 float relief(vec2 gp, float cls){
-  if (cls < 1.5) return vn2(gp * 55.) * 0.5 + vn2(vec2(gp.x * 95., gp.y * 15.)) * 0.35 + vn2(gp * 9.) * 0.15;
-  if (cls < 2.5) return vn2(gp * 3.2) * 0.55 + vn2(gp * 11.) * 0.3 + vn2(vec2(gp.x * 30., gp.y * 2.4)) * 0.15;
+  // every octave is isotropic (no stretched terms, so no directional streaks); a gentle domain warp keeps the value-noise grid from showing
+  vec2 q = gp + vec2(vn2(gp * 2.7 + 7.), vn2(gp * 2.7 + 19.)) * 0.3;
+  if (cls < 1.5) return vn2(q * 52.) * 0.4 + vn2(q * 23. + 3.) * 0.3 + vn2(q * 9.) * 0.2 + vn2(gp * 2.3) * 0.1;           // grass: tufts and blades in every direction
+  if (cls < 2.5) {                                                                                                          // soil / mud: clods, crumbs, small stones
+    float stones = smoothstep(.8, .9, vn2(gp * 27. + 11.)) * 0.4;
+    return vn2(q * 3.4) * 0.42 + vn2(q * 8.1 + 5.) * 0.28 + vn2(q * 19.) * 0.15 + stones;
+  }
   vec2 pj = abs(fract(gp * 0.8) - .5);
   return -smoothstep(.45, .5, max(pj.x, pj.y)) + vn2(gp * 24.) * 0.12;
 }
@@ -161,10 +176,47 @@ void main(){
     } else tx = texture(uTex, vUv);
   }
   if (uKind == 10 && tx.a < 0.42) discard;   // every leaf is cut out: sky shows through the canopy
+  if (uKind == 11) {
+    // tree picture: vCol.xy = the tree's anchor in the same local frame as aPos; the anchor relative to the eye is then fragment-eye + (anchor - fragment-local)
+    vec2 anc = vPosRel.xz + (vCol.xy - vLocal.xz);
+    if (dot(anc, anc) < uNear2 || tx.a < 0.42) discard;
+  }
 
   if (uKind == 4) {
     float r; albedo = asphalt(vWorldMod * uTexScale, dist, r) * uBase; rough = r; metal = 0.; coat = 0.;
     if (uTexOn > 0.5) { albedo = mix(albedo, tx.rgb * uBase, tx.a); }
+    float nrr = 1. - smoothstep(8., 38., dist);
+    vec2 rp = vWorldMod.xz;
+    if (nrr > 0.01) {
+      // stone aggregate grain: the sun catches individual chippings and bitumen between them
+      float ge = 0.005, g0 = vn2(rp * 65.), g1 = vn2(rp * 180.);
+      float gx = vn2((rp + vec2(ge, 0.)) * 65.) , gz = vn2((rp + vec2(0., ge)) * 65.), hx1 = vn2((rp + vec2(ge * 0.4, 0.)) * 180.), hz1 = vn2((rp + vec2(0., ge * 0.4)) * 180.);
+      N = normalize(N + vec3((g0 - gx) * 1.1 + (g1 - hx1) * 0.6, 0., (g0 - gz) * 1.1 + (g1 - hz1) * 0.6) * 1.7 * nrr);
+      albedo *= 1. + (g0 - .5) * 0.16 * nrr + (g1 - .5) * 0.1 * nrr;
+    }
+    float conc = step(1.1, uTexScale);
+    if (vCol.b > 1.5) {
+      // lane structure from the road mesh: uv.x = metres from the centre line, uv.y = metres along the road, vCol.xy = lane width, median half-width
+      float lw = vCol.r, a = abs(vUv.x) - vCol.g;
+      if (a > 0.) {
+        float lp = mod(a, lw) - 0.5 * lw;
+        float tr = smoothstep(0.4, 0.16, abs(abs(lp) - 0.82));            // wheel tracks, 1.64 m apart
+        rough = mix(max(rough, 0.86), 0.58, tr * (1. - 0.4 * conc));
+        albedo *= 1. - 0.17 * tr * (1. - 0.5 * conc);
+        if (conc > 0.5) {
+          // concrete slab roads: transverse expansion joint every 4.5 m, longitudinal joint at every lane edge, brushed grain
+          float jt = abs(fract(vUv.y / 4.5 + 0.5) - 0.5) * 4.5, lj = abs(abs(lp) - 0.5 * lw);
+          float jn = 1. - smoothstep(0.012, 0.034, min(jt, lj));
+          albedo *= 1. - 0.5 * jn; rough = mix(rough, 0.95, jn);
+          float br = vn2(vec2(vUv.x * 130., vUv.y * 2.6));
+          albedo *= 1. + (br - .5) * 0.07 * nrr;
+        }
+      }
+    }
+    // tar-sealed hairline cracks in patches (dark, a touch glossier)
+    float cm = smoothstep(.58, .72, vn2(rp * 0.045 + 3.)), ck = 1. - smoothstep(0., 0.014, abs(vn2(rp * 0.42 + 9.) - .5));
+    float cvis = cm * ck * (1. - smoothstep(10., 60., dist));
+    albedo *= 1. - 0.55 * cvis; rough = mix(rough, 0.42, cvis);
   } else if (uKind == 1) {
     // car paint: tinted base with metallic flake + clear coat; decals/panel lines from texture
     float dmg = 1. - vCol.r;
@@ -186,7 +238,7 @@ void main(){
   } else if (uKind == 7) {
     // natural ground: soil / grass / dry grass. Patchy at large scale, clods and blades up close, no repeating texture
     vec2 gp = vWorldMod.xz * uTexScale;
-    float n0 = vn2(gp*0.011), n1 = vn2(gp*0.07), n2 = vn2(gp*0.45), n3 = vn2(gp*2.4), n4 = vn2(gp*13.), n5 = vn2(vec2(gp.x*38., gp.y*5.));
+    float n0 = vn2(gp*0.011), n1 = vn2(gp*0.07), n2 = vn2(gp*0.45), n3 = vn2(gp*2.4), n4 = vn2(gp*13.), n5 = vn2(gp*21. + 5.);
     float f1 = 1.-smoothstep(40.,260.,dist), f2 = 1.-smoothstep(6.,45.,dist), f3 = 1.-smoothstep(1.5,16.,dist);
     float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3 + 0.12*(n5-.5)*f3;
     albedo = uBase * vCol * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
@@ -198,7 +250,13 @@ void main(){
       float hx = relief(gp + vec2(e, 0.), uFlake), hz = relief(gp + vec2(0., e), uFlake);
       float amp = uFlake < 1.5 ? 0.9 : uFlake < 2.5 ? 1.5 : 1.2;
       N = normalize(N + vec3(h0 - hx, 0., h0 - hz) * amp * rl * 3.);
-      if (uFlake < 1.5) { albedo *= 1. + (h0 - .5) * 0.28 * rl; }
+      if (uFlake < 1.5) {
+        // meadow: rich emerald, clover patches and sun-dried blade tips, tuft by tuft
+        float dry = smoothstep(.55, .8, vn2(gp * 0.9 + 3.)), clov = smoothstep(.6, .75, vn2(gp * 1.6 + 11.)), tuft = vn2(gp * 5.3);
+        albedo *= (1. + (h0 - .5) * 0.34 * rl) * mix(vec3(0.9, 1.1, 0.84), vec3(1.2, 1.04, 0.62), dry * (0.35 + 0.65 * h0));
+        albedo = mix(albedo, albedo * vec3(0.8, 1.2, 0.9), clov * 0.5 * rl);
+        albedo *= 0.88 + 0.24 * tuft * rl + 0.12 * (1. - rl);
+      }
       else if (uFlake < 2.5) {
         float damp = smoothstep(.5, .75, vn2(gp * 0.16 + 4.));
         albedo *= (0.82 + 0.36 * h0) * mix(1., 0.72, damp * rl);
@@ -215,14 +273,16 @@ void main(){
     float bx = vn2(vec2(bu + 0.02 * 38., wb.y * 3.2)) * 0.6 + vn2(vec2((bu + 0.02 * 38.) * 2.3, wb.y * 7.)) * 0.4;
     N = normalize(N + tB * (b0 - bx) * 2.2 * nb);
     rough = 0.95; metal = 0.; coat = 0.;
-  } else if (uKind == 10) {
+  } else if (uKind == 10 || uKind == 11) {
     // foliage: alpha-cut leaf cards from the atlas. Double-sided; crown-outward normals light the whole canopy softly; vertex colour carries the canopy
     // ambient occlusion (dark inside, bright tips); sunlight glows through the leaves (translucency) and the shaded side still gets some transmitted light.
     N = normalize(vNrm);
     vec3 wl = vWorldMod;
     float lf = vn2(wl.xz * 7. + wl.y * 5.) * 0.6 + vn2(wl.xy * 15. + wl.z * 9.) * 0.4;
     float nl = 1. - smoothstep(10., 70., dist);
-    albedo = tx.rgb * uBase * vCol * (1. + (lf - .5) * 0.3 * nl);
+    vec3 tint = vCol;
+    if (uKind == 11) tint = vec3(1.32 * (0.88 + 0.24 * fract(sin(dot(vCol.xy, vec2(12.9898, 78.233))) * 43758.5453)));   // pictures: painted shading is already in the texture, only a per-tree brightness varies
+    albedo = tx.rgb * uBase * tint * (1. + (lf - .5) * 0.3 * nl);
     ao = mix(0.55, 1., smoothstep(-0.7, 0.45, N.y));
     float dayL = smoothstep(0., 0.18, uSunDir.y);
     float back = pow(max(dot(viewDir, uSunDir), 0.), 2.5);
@@ -487,9 +547,20 @@ void main(){
     a = smoothstep(1., 0.2, abs(p.y)) * smoothstep(1., 0.0, u);
     a *= vCol.a;
     outCol = vec4(c * a * 3., 0.);
-  } else {
+  } else if (uMode < 3.5) {
     a = step(r, 0.95) * vCol.a;
     float lit = 0.5 + 0.5 * max(dot(normalize(vec3(p, 0.7)), uSunDir), 0.);
+    c = c * lit * (uSkyI * 0.5 + uSunCol.r * 0.5);
+    c = pow(c / (1. + c * 0.25), vec3(1./2.2));
+    outCol = vec4(c * a, a);
+  } else {
+    // falling leaf: a pointed oval that tumbles (one axis squashes and flips with time), midrib darker, lit like the chips
+    float fl = 0.3 + 0.7 * abs(cos(uTime * 3.1 + vSeed.x * 40.));
+    vec2 q = vec2(p.x, p.y / fl);
+    float w = 0.46 * (1. - q.y * q.y);
+    a = step(abs(q.x), w) * step(abs(q.y), 1.) * vCol.a;
+    c *= 1. - 0.3 * smoothstep(0.1, 0., abs(q.x));
+    float lit = 0.55 + 0.6 * max(dot(normalize(vec3(0., 0.6, 0.8)), uSunDir), 0.) * (0.6 + 0.4 * fl);
     c = c * lit * (uSkyI * 0.5 + uSunCol.r * 0.5);
     c = pow(c / (1. + c * 0.25), vec3(1./2.2));
     outCol = vec4(c * a, a);

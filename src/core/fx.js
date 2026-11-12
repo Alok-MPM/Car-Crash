@@ -39,6 +39,10 @@ export class FX {
   chip(p, v, hex) {
     this.add({ m: 3, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.025 + Math.random() * 0.05, g: 0, life: 6 + Math.random() * 6, t: 0, c: hexLin(hex || '#888888'), a: 1, drag: 0.05, up: -9.8, seed: Math.random(), rot: Math.random() * 6, rv: (Math.random() - 0.5) * 8, bounce: 0.3, solid: true });
   }
+  // a leaf (mode 4): drifts down slowly, sways sideways, tumbles, then lies on the ground and fades
+  leaf(p, v, c) {
+    this.add({ m: 4, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.05 + Math.random() * 0.045, g: 0, life: 8 + Math.random() * 5, t: 0, c: [c[0], c[1], c[2]], a: 1, drag: 0.7, up: -2.2, seed: Math.random() * 10, rot: Math.random() * 6, rv: (Math.random() - 0.5) * 5, fl: Math.random() * 6.28, landed: false });
+  }
   glass(p, v) {
     this.add({ m: 3, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.02 + Math.random() * 0.04, g: 0, life: 6 + Math.random() * 6, t: 0, c: [0.7, 0.85, 0.9], a: 1, drag: 0.05, up: -9.8, seed: Math.random(), rot: Math.random() * 6, rv: (Math.random() - 0.5) * 10, bounce: 0.25, solid: true });
   }
@@ -62,6 +66,13 @@ export class FX {
       else p.v[1] += p.up * dt;
       p.p[0] += p.v[0] * dt; p.p[1] += p.v[1] * dt; p.p[2] += p.v[2] * dt;
       if (p.rv) p.rot += p.rv * dt;
+      if (p.m === 4) {
+        if (p.landed) { p.v[0] = p.v[1] = p.v[2] = 0; p.rv = 0; continue; }
+        if (p.v[1] < -1.15) p.v[1] = -1.15;                                              // light and wide: terminal speed about 1 m/s
+        p.v[0] += Math.cos(p.t * 2.3 + p.fl) * 1.5 * dt; p.v[2] += Math.sin(p.t * 1.8 + p.fl * 1.3) * 1.2 * dt;   // side-to-side flutter
+        if (p.p[1] < 0.03) { p.p[1] = 0.03; p.landed = true; p.life = Math.min(p.life, p.t + 5 + Math.random() * 3); }
+        continue;
+      }
       if (p.bounce !== undefined && p.p[1] < 0.02) {
         p.p[1] = 0.02;
         if (p.v[1] < 0) { p.v[1] = -p.v[1] * p.bounce; p.v[0] *= 0.6; p.v[2] *= 0.6; }

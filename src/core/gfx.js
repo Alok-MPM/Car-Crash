@@ -421,6 +421,8 @@ export class Renderer {
     gl.uniform1f(u.uAlpha, m.alpha ?? 1);
     gl.uniform1f(u.uFlake, m.flake || 0);
     gl.uniform1f(u.uTexScale, m.texScale || 1);
+    gl.uniform1f(u.uNear2, m.near2 || 0);
+    gl.uniform1f(u.uSway, m.sway || 0);
     if (m.tex) { gl.uniform1f(u.uTexOn, 1); gl.bindTexture(gl.TEXTURE_2D, m.tex); } else gl.uniform1f(u.uTexOn, 0);
     if (m.doubleSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
     if (m.poly) { const lv = m.poly === true ? 2 : m.poly; gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-lv, -3 * lv); } else gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -463,14 +465,14 @@ export class Renderer {
     // right / up in camera space (rotation only view)
     const v = this.view;
     const rx = [v[0], v[4], v[8]], ry = [v[1], v[5], v[9]];
-    const groups = [[], [], [], []];
+    const groups = [[], [], [], [], []];
     for (const p of list) groups[p.mode || 0].push(p);
     gl.useProgram(P.p);
     this._setEnv(P);
     gl.uniformMatrix4fv(P.u.uVP, false, this.vp);
     gl.enable(gl.BLEND); gl.depthMask(false); gl.disable(gl.CULL_FACE);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    for (let mode = 0; mode < 4; mode++) {
+    for (let mode = 0; mode < 5; mode++) {
       const g = groups[mode];
       if (!g.length) continue;
       if (mode === 0) g.sort((a, b) => b.dist - a.dist);

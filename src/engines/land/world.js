@@ -136,7 +136,7 @@ export class Scene {
     // ground
     // the world itself is natural ground (soil / dry grass, procedural); tarmac exists only where it was built (proving ground + roads)
     // the ground is cut into 250 m cells: two 24 km triangles give the rasteriser a depth plane that is only good to a few cm, and the thin road/lawn layers 5 mm above it then lose the depth test (tan 'dry' ground showing through the lawns). Pushed back a hair so every layer on top always wins.
-    this.ground = r.createMesh(plane(24000, 24000, 1, 1, 96, 96), { mat: { kind: 7, base: [0.2, 0.2, 0.085], texScale: 1, flake: 1, poly: -1 } });
+    this.ground = r.createMesh(plane(24000, 24000, 1, 1, 96, 96), { mat: { kind: 7, base: [0.12, 0.22, 0.07], texScale: 1, flake: 1, poly: -1 } });
     this.tarmac = [[0, -3000, 52, 6260], [0, -300, 360, 820]].map(([x, z, w, d]) => ({ m: r.createMesh(plane(w, d, 1, 1, Math.max(1, Math.round(w / 120)), Math.max(1, Math.round(d / 120))), { mat: { kind: 4, base: [1, 1, 1], texScale: 1, poly: 1 } }), model: m4.fromTRS(new Float32Array(16), [x === 0 && w === 360 ? 5 : x, 0.003, z], [0, 0, 0, 1], 1) }));
     // markings: one merged mesh (white / yellow)
     const white = new Builder([0, 0, 0]), yellow = new Builder([0, 0, 0]);
@@ -215,6 +215,7 @@ export class Scene {
     // ---- the city + land (seeded, streamed): roads of every type, lots with parking, trees, farmland
     this.cityPlan = planCity({ seed: 7, cx: 1500, cz: -1200 });
     this.land = buildLand(r, this.cityPlan);
+    this.land.treeField.attach(this.world, this.ctx.fx, this.ctx.sfx);
     this.streets = [];
     this.city = new CityStreamer(this.cityPlan, S);
     // end wall of the runway (stacked concrete blocks)
@@ -345,6 +346,7 @@ export class Scene {
   // ---------- 10 m physics bubble for loose props ----------
   // props that lie still and are far from every watcher leave the physics world (they stay drawn); they come back when a watcher's path reaches them
   watchProps(pts) {
+    if (this.land) this.land.treeField.watch(pts);   // trunk bodies of trees that something can reach
     const add = [], rem = [];
     for (const p of this.props) {
       if (p.dead) continue;
@@ -375,6 +377,7 @@ export class Scene {
 
   update(dt) {
     this.structures.update(dt);
+    if (this.land) this.land.treeField.update(dt);
     // remove props that fell absurdly far
     for (const p of this.props) if (p.body.pos[1] < -50) { p.dead = true; }
   }
@@ -390,14 +393,7 @@ export class Scene {
       for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
       for (const m of this.land.holes) r.add(m, this.markModel, { cast: false });
       for (const t of this.land.furMeshes) { if (Math.abs(t.cx - cam[0]) < 800 && Math.abs(t.cz - cam[2]) < 800) r.add(t.m, this.markModel, { cast: false }); }
-      let built = 0;   // detailed tree cells are built lazily, one per frame; until then the cheap far model stands in
-      for (const t of this.land.treeMeshes) {
-        const dd = Math.max(Math.abs(t.cx - cam[0]), Math.abs(t.cz - cam[2]));
-        if (dd > 480) continue;
-        let m = null;
-        if (dd < 150) { m = t.near; if (!m && built < 1) { m = t.makeNear(); built++; } }
-        if (m) r.add(m, t.model, { cast: true }); else r.add(t.far, t.model, { cast: false });
-      }
+      this.land.treeField.draw(cam);   // pictures per 192 m cell (1 draw each) + the nearest few real 3D trees
     }
     const cx = cam[0], cz = cam[2];
     for (const b of this.boards) if (Math.abs(b.model[14] - cz) < 900) r.add(b.m, b.model, { cast: false });

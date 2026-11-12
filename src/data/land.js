@@ -32,16 +32,19 @@ export const GROUND = {
 
 export const CROPS = ['wheat', 'paddy', 'mustard', 'plough'];
 
+// Species. kind: broad | conifer | palm. Every broad species has its own architecture in engines/land/trees.js (ARCH): mango = low heavy dome, neem = lighter asymmetric crown on a visible fork,
+// banyan = vast horizontal limbs with hanging prop-roots, gulmohar = flat umbrella with vermilion blossom, babool = crooked V trunk with flat savanna pads.
 export const TREES = {
-  neem:    { kind: 'broad',  h: [5, 8],   crown: [2.2, 3.4], trunk: 0.22, leaf: [[0.13, 0.28, 0.08], [0.16, 0.32, 0.1]] },
-  mango:   { kind: 'broad',  h: [6, 9],   crown: [2.8, 3.8], trunk: 0.28, leaf: [[0.1, 0.24, 0.07], [0.12, 0.27, 0.08]] },
-  ashoka:  { kind: 'conifer', h: [6, 10], crown: [1.2, 1.8], trunk: 0.18, leaf: [[0.1, 0.26, 0.09], [0.12, 0.3, 0.1]] },
-  babool:  { kind: 'broad',  h: [3.5, 5], crown: [1.6, 2.4], trunk: 0.15, leaf: [[0.3, 0.34, 0.12], [0.26, 0.3, 0.1]] },
-  shrub:   { kind: 'broad',  h: [0.9, 1.6], crown: [0.45, 0.85], trunk: 0.04, leaf: [[0.1, 0.25, 0.07], [0.14, 0.3, 0.08]] },
-  banyan:  { kind: 'broad',  h: [9, 13],  crown: [4.4, 6.2], trunk: 0.5, leaf: [[0.08, 0.2, 0.06], [0.1, 0.23, 0.07]] },
-  palm:    { kind: 'palm',   h: [7, 11],  crown: [1.4, 2.0], trunk: 0.14, leaf: [[0.12, 0.28, 0.08], [0.15, 0.32, 0.09]] },
+  neem:     { kind: 'broad',   h: [7, 10],    crown: [2.6, 3.6], trunk: 0.22, leaf: [[0.17, 0.32, 0.07], [0.2, 0.36, 0.09]] },
+  mango:    { kind: 'broad',   h: [6, 9],     crown: [3.4, 4.6], trunk: 0.34, leaf: [[0.07, 0.2, 0.07], [0.09, 0.23, 0.08]] },
+  banyan:   { kind: 'broad',   h: [9, 13],    crown: [5.0, 7.2], trunk: 0.55, leaf: [[0.08, 0.2, 0.06], [0.1, 0.23, 0.07]] },
+  gulmohar: { kind: 'broad',   h: [6, 9],     crown: [3.2, 4.4], trunk: 0.26, leaf: [[0.1, 0.27, 0.07], [0.12, 0.3, 0.08]] },
+  babool:   { kind: 'broad',   h: [3.5, 5.5], crown: [2.0, 2.8], trunk: 0.15, leaf: [[0.15, 0.27, 0.08], [0.17, 0.3, 0.09]] },
+  ashoka:   { kind: 'conifer', h: [7, 11],    crown: [1.4, 2.0], trunk: 0.18, leaf: [[0.1, 0.26, 0.09], [0.12, 0.3, 0.1]] },
+  palm:     { kind: 'palm',    h: [7, 11],    crown: [1.4, 2.0], trunk: 0.14, leaf: [[0.12, 0.28, 0.08], [0.15, 0.32, 0.09]] },
+  shrub:    { kind: 'broad',   h: [0.9, 1.6], crown: [0.45, 0.85], trunk: 0.04, leaf: [[0.1, 0.25, 0.07], [0.14, 0.3, 0.08]] },
 };
-export const TREE_SETS = { front: ['neem', 'mango', 'ashoka', 'neem', 'palm'], frontBig: ['neem', 'mango', 'banyan', 'palm', 'ashoka', 'mango'], side: ['ashoka', 'ashoka', 'babool', 'palm'], shrub: ['shrub'], street: ['neem', 'ashoka', 'neem'], park: ['mango', 'neem', 'ashoka'], farm: ['mango', 'babool', 'neem'], village: ['neem', 'mango', 'neem', 'ashoka'], forest: ['neem', 'mango', 'ashoka', 'babool'] };
+export const TREE_SETS = { front: ['neem', 'mango', 'gulmohar', 'ashoka', 'neem', 'palm', 'gulmohar'], frontBig: ['neem', 'mango', 'banyan', 'gulmohar', 'palm', 'ashoka', 'mango'], side: ['ashoka', 'ashoka', 'babool', 'palm'], shrub: ['shrub'], street: ['neem', 'gulmohar', 'ashoka', 'neem', 'gulmohar'], park: ['mango', 'gulmohar', 'neem', 'ashoka', 'banyan'], farm: ['mango', 'babool', 'neem', 'babool'], village: ['neem', 'banyan', 'mango', 'neem', 'ashoka', 'babool'], forest: ['neem', 'mango', 'ashoka', 'babool', 'gulmohar', 'banyan'] };
 
 // parking pad beside a house: bays, paver colour
 export const PARKING = { bayW: 2.7, bayD: 5.2, apron: 1.0 };

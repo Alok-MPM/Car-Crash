@@ -155,6 +155,7 @@ const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 world.onImpact = (e) => {
   scene.structures.onImpact(e);
+  { const tr = e.a.tree || e.b.tree; if (tr && e.speed > 2 && scene.land) scene.land.treeField.hit(tr, e.p, e.speed); }   // a trunk was hit: leaf shower, bark chips, thud
   const ca = e.a.userData && e.a.userData.car, cb = e.b.userData && e.b.userData.car;
   if (ca) ca.impact(e, e.b, true);
   if (cb) cb.impact(e, e.a, false);

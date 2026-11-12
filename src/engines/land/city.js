@@ -4,7 +4,8 @@ import { ROADS, GROUND, CROPS, TREES, TREE_SETS, PARKING, LAYERS, ROAD_LAYERS, A
 import { RECIPES } from '../../data/recipes.js';
 import { Builder, M } from '../cars/carmodel.js';
 import { rbox, cylinder } from '../../core/geo.js';
-import { makeFoliageTex, addTree } from './trees.js';
+import { mulchDisc } from './trees.js';
+import { TreeField } from './treefield.js';
 import { mulberry32, m4, segHitsRect } from '../../core/math.js';
 import { GeoBuf, T, hexRGB } from '../buildings/render.js';
 import { PALETTES } from '../buildings/catalog.js';
@@ -209,7 +210,7 @@ const MATS = () => ({
   [P.white]: { kind: 0, base: GROUND.white.color, rough: 0.7, poly: 7 },
   [P.yellow]: { kind: 0, base: GROUND.yellow.color, rough: 0.7, poly: 7 },
   [P.trunk]: { kind: 9, base: [0.18, 0.12, 0.07], rough: 0.95 },
-  [P.leafA]: { kind: 10, base: [0.52, 0.52, 0.52], rough: 0.9, doubleSided: true, cut: true },   // alpha-cut leaf cards from the foliage atlas (tex is set in buildLand)
+  [P.leafA]: { kind: 10, base: [0.52, 0.52, 0.52], rough: 0.9, doubleSided: true, cut: true, sway: 1 },   // alpha-cut leaf cards from the foliage atlas (tex is set in buildLand)
   [P.mulch]: { kind: 7, flake: 2, base: [0.075, 0.048, 0.03], texScale: 1, poly: 2, noShadow: true },   // dark mulch / soil bed under trees and shrubs
   [P.steel]: { kind: 0, base: [0.62, 0.64, 0.66], metal: 0.8, rough: 0.35 },
   [P.pole]: { kind: 0, base: [0.45, 0.47, 0.5], metal: 0.6, rough: 0.5 },
@@ -220,9 +221,11 @@ const MATS = () => ({
 export function buildLand(r, plan) {
   const parts = {}; const Bd = (k) => parts[k] || (parts[k] = new Builder([0, 0, 0]));
   // road paint, kerb strips, lawns, fields: layers a few millimetres thick, so only the top face can ever be seen. One quad (2 triangles) instead of a rounded box (108).
-  const slab = (bd, part, x0, z0, x1, z1, y0, y1) => {
+  // uvf(x, z) -> [u, v, c0, c1, c2] lets road surfaces carry their lane structure (u = metres from the centre line, v = metres along, colour = lane width / median half-width / marker)
+  const slab = (bd, part, x0, z0, x1, z1, y0, y1, uvf) => {
     const cx0 = (x0 + x1) / 2, cz0 = (z0 + z1) / 2, hx = Math.max((x1 - x0) / 2, 0.001), hz = Math.max((z1 - z0) / 2, 0.001), y = (y0 + y1) / 2 + Math.max((y1 - y0) / 2, 0.0005);
-    const a = bd.vert(cx0 - hx, y, cz0 - hz, 0, 1, 0, 3, 3), b = bd.vert(cx0 - hx, y, cz0 + hz, 0, 1, 0, 3, 3), c = bd.vert(cx0 + hx, y, cz0 + hz, 0, 1, 0, 3, 3), d = bd.vert(cx0 + hx, y, cz0 - hz, 0, 1, 0, 3, 3);
+    const V = (x, z) => { const t = uvf ? uvf(x, z) : [3, 3, 1, 1, 1]; return bd.vert(x, y, z, 0, 1, 0, t[0], t[1], t[2], t[3], t[4]); };
+    const a = V(cx0 - hx, cz0 - hz), b = V(cx0 - hx, cz0 + hz), c = V(cx0 + hx, cz0 + hz), d = V(cx0 + hx, cz0 - hz);
     bd.grp(part, 'paint').idx.push(a, b, c, a, c, d);
   };
   const Q = (key, part, x0, z0, x1, z1) => slab(Bd(key), part, x0, z0, x1, z1, 0.004 + 0.0008 * part, 0.0062 + 0.0008 * part);
@@ -250,7 +253,11 @@ export function buildLand(r, plan) {
     // roadbed shoulders/embankment: a strip of exposed earth on the verge of open-country roads, then the paved shoulder
     if (rd.type === 'highway' || rd.type === 'expressway') { A(rd, 'road', rd.a0, rd.a1, -hw - 2.2, -hw, P.embank); A(rd, 'road', rd.a0, rd.a1, hw, hw + 2.2, P.embank); }
     if (T.footpath) { A(rd, 'road', rd.a0, rd.a1, -hw - T.footpath, -hw, P.footpath); A(rd, 'road', rd.a0, rd.a1, hw, hw + T.footpath, P.footpath); }
-    A(rd, 'road', rd.a0, rd.a1, -hw, hw, surfPart[rd.type]);
+    {   // the driving surface carries its lane layout (wheel tracks, concrete joints are drawn from it)
+      const part = surfPart[rd.type], med = T.median || 0, sh = T.shoulder || 0, lw = Math.max(1.5, (rd.w - med - 2 * sh) / (2 * Math.max(1, T.lanes || 1)));
+      const ax = rd.axis === 'x', y0 = 0.004 + 0.0008 * part;
+      slab(Bd('road'), part, ax ? rd.a0 : rd.c - hw, ax ? rd.c - hw : rd.a0, ax ? rd.a1 : rd.c + hw, ax ? rd.c + hw : rd.a1, y0, y0 + 0.0022, (x, z) => (ax ? [z - rd.c, x, lw, med / 2, 2] : [x - rd.c, z, lw, med / 2, 2]));
+    }
     if (rd.type === 'offroad') { for (const o of [-0.95, 0.95]) A(rd, 'road', rd.a0, rd.a1, o - 0.28, o + 0.28, P.rut); }
     // paved shoulders (lighter asphalt) outside the edge line on highways
     if (T.shoulder && (rd.type === 'highway' || rd.type === 'expressway')) { Ag(rd, 'road', -hw, -hw + T.shoulder, P.shoulder); Ag(rd, 'road', hw - T.shoulder, hw, P.shoulder); }
@@ -302,6 +309,13 @@ export function buildLand(r, plan) {
   for (const l of plan.lawns) Q('lot', P.grass, l.x0, l.z0, l.x1, l.z1);
   for (const w of plan.walks) Q('lot', P.paver, w[0], w[1], w[2], w[3]);
   for (const w of plan.beds) slab(Bd('lot'), P.mulch, w[0], w[1], w[2], w[3], 0.0062, 0.0066);   // mulch beds sit just above the lawn
+  // soil / mulch pit under every garden tree and shrub (merged into the lot mesh, so it costs no draw call); forest and farm trees stand on the wild ground
+  { const rm = mulberry32(4242);
+    for (const t of plan.trees) {
+      if (t.set === 'forest' || t.set === 'farm') continue;
+      const set = TREE_SETS[t.set], sp = TREES[set[Math.floor(t.s * 97) % set.length]], cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]);
+      mulchDisc(Bd('lot'), P.mulch, t.x, t.z, sp.kind === 'broad' && sp.h[1] < 2 ? cr * 0.8 : Math.min(1.6, 0.45 + sp.trunk * 2.2), rm);
+    } }
 
   const PM = MATS(), meshes = [];
   const furMeshes = [];
@@ -311,27 +325,8 @@ export function buildLand(r, plan) {
     else meshes.push(r.createMesh(f.geo, { groups: f.groups, radius: 9000 }));
   }
 
-  // trees: leaf-card trees merged per 96 m cell (cell-local vertices + a model matrix). Each cell has a cheap FAR model built now and a detailed NEAR model built the first time the camera gets close.
-  PM[P.leafA].tex = makeFoliageTex(r);
-  const TC = 96, TW = { trunk: P.trunk, leaf: P.leafA, mulch: P.mulch }, cell = new Map();
-  for (const t of plan.trees) {
-    const sp = TREES[TREE_SETS[t.set][Math.floor(t.s * 97) % TREE_SETS[t.set].length]];
-    const kx = Math.floor(t.x / TC), kz = Math.floor(t.z / TC), key = kx + ':' + kz;
-    let c = cell.get(key); if (!c) { c = { cx: (kx + 0.5) * TC, cz: (kz + 0.5) * TC, items: [], near: null, far: null }; cell.set(key, c); }
-    const h = sp.h[0] + t.s2 * (sp.h[1] - sp.h[0]), cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]), la = sp.leaf[t.s3 > 0.5 ? 1 : 0];
-    c.items.push({ sp, t, h, cr, col: [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09] });
-  }
-  const mkTrees = (c, lod) => {
-    const b = new Builder([-c.cx, 0, -c.cz]);
-    for (const it of c.items) addTree(b, TW, it.sp, it.t, it.h, it.cr, it.col, lod);
-    const f = b.finish(); f.groups.forEach((g) => { g.mat = PM[g.part]; });
-    return r.createMesh(f.geo, { groups: f.groups, radius: 90 });
-  };
-  const treeMeshes = [];
-  for (const c of cell.values()) {
-    c.far = mkTrees(c, 1);
-    treeMeshes.push({ cx: c.cx, cz: c.cz, model: m4.fromTRS(new Float32Array(16), [c.cx, 0, c.cz], [0, 0, 0, 1], 1), far: c.far, get near() { return c.near; }, makeNear() { return c.near || (c.near = mkTrees(c, 0)); } });
-  }
+  // trees: every species is compiled once as a prototype 3D mesh and once as a painted picture (see treefield.js); nothing is built while playing
+  const treeField = new TreeField({ r, plan, TREES, TREE_SETS, W: { trunk: P.trunk, leaf: P.leafA }, leafMat: PM[P.leafA], trunkMat: PM[P.trunk] });
 
   // road damage: a hole digs through the layers in order (wearing course, binder, base, sub-base, subgrade). Rings of decreasing size, each in its layer's colour.
   const holes = [];
@@ -348,7 +343,7 @@ export function buildLand(r, plan) {
     if (holes.length > 40) holes.shift();
     return true;
   };
-  return { meshes, furMeshes, treeMeshes, holes, roadHole };
+  return { meshes, furMeshes, treeField, holes, roadHole };
 }
 
 // ---------------------------------------------------------------- streaming of buildings around the player
