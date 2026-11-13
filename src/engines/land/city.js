@@ -4,7 +4,7 @@ import { ROADS, GROUND, CROPS, TREES, TREE_SETS, PARKING, LAYERS, ROAD_LAYERS, A
 import { RECIPES } from '../../data/recipes.js';
 import { Builder, M } from '../cars/carmodel.js';
 import { rbox, cylinder } from '../../core/geo.js';
-import { mulchDisc } from './trees.js';
+import { SoilField } from './soil.js';
 import { TreeField } from './treefield.js';
 import { mulberry32, m4, segHitsRect } from '../../core/math.js';
 import { GeoBuf, T, hexRGB } from '../buildings/render.js';
@@ -180,8 +180,9 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
 // Every flat layer on the ground has a draw LEVEL (polygon offset) so layers always stack in the right order at any distance - no flicker.
 const P = {}; let _n = 0; for (const k of ['dry', 'grass', 'soil', 'plough', 'wheat', 'paddy', 'mustard', 'rowDark', 'rowLight', 'paver', 'footpath', 'chowk', 'water', 'embank',
   'rBC', 'rBazaar', 'rGali', 'rVillage', 'rOff', 'rut', 'shoulder', 'kerb', 'kerbBlack', 'median', 'white', 'yellow', 'trunk', 'leafA', 'steel', 'pole', 'sign', 'signW',
-  'hBC', 'hDBM', 'hWMM', 'hGSB', 'hSub', 'mulch']) P[k] = _n++;
+  'hBC', 'hDBM', 'hWMM', 'hGSB', 'hSub', 'mulch', 'nut0', 'nut1', 'nut2', 'nut3', 'nut4']) P[k] = _n++;
 const TINT = (c, m) => c.map((v) => v * m);
+const NUT = { kind: 0, base: [1, 1, 1], rough: 0.78, doubleSided: true };
 const MATS = () => ({
   [P.dry]: { kind: 7, base: GROUND.grassDry.color, texScale: 1 },
   [P.grass]: { kind: 7, flake: 1, base: GROUND.grass.color, texScale: 1, poly: 1 },
@@ -211,6 +212,7 @@ const MATS = () => ({
   [P.yellow]: { kind: 0, base: GROUND.yellow.color, rough: 0.7, poly: 7 },
   [P.trunk]: { kind: 9, base: [0.18, 0.12, 0.07], rough: 0.95 },
   [P.leafA]: { kind: 10, base: [0.52, 0.52, 0.52], rough: 0.9, doubleSided: true, cut: true, sway: 1 },   // alpha-cut leaf cards from the foliage atlas (tex is set in buildLand)
+  [P.nut0]: NUT, [P.nut1]: NUT, [P.nut2]: NUT, [P.nut3]: NUT, [P.nut4]: NUT,   // coconuts / mangoes: vertex-coloured husk and skin, hidden group by group when they fall
   [P.mulch]: { kind: 7, flake: 2, base: [0.075, 0.048, 0.03], texScale: 1, poly: 2, noShadow: true },   // dark mulch / soil bed under trees and shrubs
   [P.steel]: { kind: 0, base: [0.62, 0.64, 0.66], metal: 0.8, rough: 0.35 },
   [P.pole]: { kind: 0, base: [0.45, 0.47, 0.5], metal: 0.6, rough: 0.5 },
@@ -309,13 +311,7 @@ export function buildLand(r, plan) {
   for (const l of plan.lawns) Q('lot', P.grass, l.x0, l.z0, l.x1, l.z1);
   for (const w of plan.walks) Q('lot', P.paver, w[0], w[1], w[2], w[3]);
   for (const w of plan.beds) slab(Bd('lot'), P.mulch, w[0], w[1], w[2], w[3], 0.0062, 0.0066);   // mulch beds sit just above the lawn
-  // soil / mulch pit under every garden tree and shrub (merged into the lot mesh, so it costs no draw call); forest and farm trees stand on the wild ground
-  { const rm = mulberry32(4242);
-    for (const t of plan.trees) {
-      if (t.set === 'forest' || t.set === 'farm') continue;
-      const set = TREE_SETS[t.set], sp = TREES[set[Math.floor(t.s * 97) % set.length]], cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]);
-      mulchDisc(Bd('lot'), P.mulch, t.x, t.z, sp.kind === 'broad' && sp.h[1] < 2 ? cr * 0.8 : Math.min(1.6, 0.45 + sp.trunk * 2.2), rm);
-    } }
+  // (the bare root zone round a garden tree is part of the soil field now: ragged, real soil in its own colour, no hard disc)
 
   const PM = MATS(), meshes = [];
   const furMeshes = [];
@@ -326,7 +322,7 @@ export function buildLand(r, plan) {
   }
 
   // trees: every species is compiled once as a prototype 3D mesh and once as a painted picture (see treefield.js); nothing is built while playing
-  const treeField = new TreeField({ r, plan, TREES, TREE_SETS, W: { trunk: P.trunk, leaf: P.leafA }, leafMat: PM[P.leafA], trunkMat: PM[P.trunk] });
+  const treeField = new TreeField({ r, plan, TREES, TREE_SETS, W: { trunk: P.trunk, leaf: P.leafA, nuts: [P.nut0, P.nut1, P.nut2, P.nut3, P.nut4] }, leafMat: PM[P.leafA], trunkMat: PM[P.trunk], nutMat: PM[P.nut0] });
 
   // road damage: a hole digs through the layers in order (wearing course, binder, base, sub-base, subgrade). Rings of decreasing size, each in its layer's colour.
   const holes = [];
@@ -343,7 +339,30 @@ export function buildLand(r, plan) {
     if (holes.length > 40) holes.shift();
     return true;
   };
-  return { meshes, furMeshes, treeField, holes, roadHole };
+  // the deformable soil layer: where the ground is soft (everything but road, paver, floor, building and water) and the bare root zones round the garden trees
+  const inR = (x, z, x0, z0, x1, z1, m) => x > x0 - m && x < x1 + m && z > z0 - m && z < z1 + m;
+  const isHard = (x, z) => {
+    // inside the tarmac plane (proving ground + city) the ground is asphalt except where a lawn or a planting bed lies on it
+    if (plan.paved(x, z)) {
+      for (const l of plan.lawns) if (inR(x, z, l.x0, l.z0, l.x1, l.z1, -0.1)) return false;
+      for (const w of plan.beds) if (inR(x, z, w[0], w[1], w[2], w[3], -0.1)) return false;
+      return true;
+    }
+    if (plan.roadAt(x, z) || plan.roadAt(x + 1.2, z) || plan.roadAt(x - 1.2, z) || plan.roadAt(x, z + 1.2) || plan.roadAt(x, z - 1.2)) return true;
+    for (const p of plan.pads) { if (inR(x, z, p.x0, p.z0, p.x1, p.z1, 0.3) || inR(x, z, p.apron[0], p.apron[1], p.apron[2], p.apron[3], 0.3)) return true; }
+    for (const w of plan.walks) if (inR(x, z, w[0], w[1], w[2], w[3], 0.2)) return true;
+    for (const c of plan.chowks) if (inR(x, z, c.x0, c.z0, c.x1, c.z1, 0.3)) return true;
+    for (const l of plan.lots) if (inR(x, z, l.x - l.w / 2, l.zFront - l.d, l.x + l.w / 2, l.zFront, 0.2)) return true;
+    for (const p of plan.ponds) if (((x - p.x) / (p.rx + 0.5)) ** 2 + ((z - p.z) / (p.rz + 0.5)) ** 2 < 1) return true;
+    return false;
+  };
+  const spots = [];
+  for (const tr of treeField.trees) {
+    if (tr.set === 'forest' || tr.set === 'farm') continue;
+    spots.push({ x: tr.x, z: tr.z, r0: tr.name === 'shrub' ? Math.max(0.35, tr.cr * 0.7) : Math.min(1.7, 0.5 + tr.trunkR * 3.2) });
+  }
+  const soil = new SoilField({ r, trees: spots, isHard });
+  return { meshes, furMeshes, treeField, soil, holes, roadHole };
 }
 
 // ---------------------------------------------------------------- streaming of buildings around the player

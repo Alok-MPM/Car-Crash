@@ -146,6 +146,8 @@ export class Car {
     const ek = E / 154000;
     let depth = 0.35 * Math.pow(ek, 0.62);
     if (other.group === GROUP.CAR) depth *= 0.8;
+    // a small hard object (a coconut) puts all of its energy into one sharp dent instead of spreading it over the panel: 2 kg at 12 m/s = 150 J = a 3 - 4 cm dent
+    if (other.dent) depth = 0.045 * Math.pow(E / 220, 0.7);
     depth = clamp(depth, 0, 1.15);
     if (depth < 0.012) { this.scrape(e.p, v); return; }
     const now = this.ctx.time;
@@ -162,7 +164,7 @@ export class Car {
     let dir = [-nl[0] * 0.7 - (pl[0] / cl) * 0.3, -nl[1] * 0.7 - (pl[1] / cl) * 0.3, -nl[2] * 0.7 - (pl[2] / cl) * 0.3];
     const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
     dir = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
-    const radius = 0.5 + depth * 0.7;
+    const radius = other.dent ? 0.17 + depth * 1.5 : 0.5 + depth * 0.7;
     this.deformAt(pl, dir, depth, radius);
     this.deform += depth * (other.group === GROUP.CAR ? 0.9 : 1);
     this.cost = Math.min(this.spec.price * 1.0, this.cost + this.spec.price * 0.3 * Math.pow(depth, 1.4));

@@ -7,17 +7,24 @@
 import { Body, GROUP } from '../../core/physics.js';
 import { m4 } from '../../core/math.js';
 import { Builder } from '../cars/carmodel.js';
-import { addTree, makeFoliageTex, makeImpostors } from './trees.js';
+import { addTree, ellipsoid, makeFoliageTex, makeImpostors } from './trees.js';
 
 export const NEAR = 38, CAP = 26, CAST = 14;
 const BG = 192, FAR = 560, BK = 48, TB = 24, PON = 10, POFF = 13.5;
 const PETAL = { gulmohar: [0.78, 0.09, 0.03] };
-const LEAFERS = { neem: 1, mango: 1, banyan: 1, gulmohar: 1, babool: 0.5 };
+const LEAFERS = { neem: 1, mango: 1, banyan: 1, gulmohar: 1, babool: 0.5 };   // (a coconut palm sheds no little leaves: only nuts fall from it)
+// fruit that can be shaken loose. A ripe coconut with its husk weighs about 2 kg: from a palm crown it arrives at 12+ m/s (150+ J) and dents sheet metal.
+const FRUIT = {
+  coconut: { mass: 2.0, he: [0.1, 0.14, 0.1], box: [0.095, 0.13, 0.095], col: [[0.14, 0.22, 0.05], [0.26, 0.17, 0.075]], tri: 0.07 },
+  mango: { mass: 0.4, he: [0.055, 0.085, 0.055], box: [0.05, 0.075, 0.05], col: [[0.24, 0.36, 0.06], [0.55, 0.42, 0.07]], tri: 0 },
+};
+const FRUIT_OF = { palm: 'coconut', mango: 'mango' };
+const MAXNUT = 30;
 
 export class TreeField {
   // W: { trunk, leaf } part ids; leafMat / trunkMat: the shared material objects of the land mesh
-  constructor({ r, plan, TREES, TREE_SETS, W, leafMat, trunkMat }) {
-    this.r = r; this.world = null; this.fx = null; this.sfx = null;
+  constructor({ r, plan, TREES, TREE_SETS, W, leafMat, trunkMat, nutMat }) {
+    this.r = r; this.W = W; this.world = null; this.fx = null; this.sfx = null;
     const t0 = performance.now();
     leafMat.tex = makeFoliageTex(r);
     const t1 = performance.now();
@@ -29,16 +36,21 @@ export class TreeField {
     for (const k of Object.keys(TREE_SETS)) for (const n of TREE_SETS[k]) used.add(n);
     this.protos = {};
     for (const name of used) {
-      const sp = TREES[name], hN = (sp.h[0] + sp.h[1]) / 2, cN = (sp.crown[0] + sp.crown[1]) / 2, list = [];
+      const sp = TREES[name], hN = (sp.h[0] + sp.h[1]) / 2, cN = (sp.crown[0] + sp.crown[1]) / 2, list = [], fruit = [];
       for (let v = 0; v < 3; v++) {
         const la = v === 0 ? sp.leaf[0] : v === 1 ? sp.leaf[1] : [(sp.leaf[0][0] + sp.leaf[1][0]) / 2, (sp.leaf[0][1] + sp.leaf[1][1]) / 2, (sp.leaf[0][2] + sp.leaf[1][2]) / 2];
         const b = new Builder([0, 0, 0]);
-        addTree(b, W, name, sp, { x: 0, z: 0, s: 0.137 + 0.29 * v, s2: 0.5 + 0.11 * v, s3: 0.31 + 0.23 * v }, hN, cN, [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09]);
-        const f = b.finish(); f.groups.forEach((g) => { g.mat = g.part === W.trunk ? trunkMat : leafMat; });
+        const fp = addTree(b, W, name, sp, { x: 0, z: 0, s: 0.137 + 0.29 * v, s2: 0.5 + 0.11 * v, s3: 0.31 + 0.23 * v }, hN, cN, [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09]);
+        const f = b.finish(); f.groups.forEach((g) => { g.mat = g.part === W.trunk ? trunkMat : W.nuts.includes(g.part) ? nutMat : leafMat; });
         list.push(r.createMesh(f.geo, { groups: f.groups, radius: hN * 1.2 + cN }));
+        fruit.push(fp);
       }
-      this.protos[name] = { hN, cN, list };
+      this.protos[name] = { hN, cN, list, fruit };
     }
+    // the shapes of loose fruit (one mesh per fruit kind and skin colour), drawn for every fallen piece
+    this.nutMesh = {};
+    for (const k of Object.keys(FRUIT)) this.nutMesh[k] = FRUIT[k].col.map((col) => { const b = new Builder([0, 0, 0]); ellipsoid(b, W.nuts[0], 0, 0, 0, FRUIT[k].he[0], FRUIT[k].he[1], [0, 1, 0], col, FRUIT[k].tri); const f = b.finish(); f.groups.forEach((g) => { g.mat = nutMat; }); return r.createMesh(f.geo, { groups: f.groups, radius: 0.4 }); });
+    this.nuts = []; this.pend = [];
     const t3 = performance.now();
     // ---- every tree of the plan
     this.trees = []; this.bk = new Map(); this.tb = new Map();
@@ -46,7 +58,7 @@ export class TreeField {
     for (const t of plan.trees) {
       const set = TREE_SETS[t.set], name = set[Math.floor(t.s * 97) % set.length], sp = TREES[name], P = this.protos[name];
       const h = sp.h[0] + t.s2 * (sp.h[1] - sp.h[0]), cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]), s = Math.sqrt((h / P.hN) * (cr / P.cN));
-      const tr = { x: t.x, z: t.z, name, sp, P, s, h, cr, v: Math.floor(t.s * 1000) % 3, yaw: (t.s2 * 6.2832 + t.s3 * 3.1) % 6.2832, trunkR: name === 'shrub' ? 0 : sp.trunk * s * 0.95, body: null, idle: 0, want: 0, m: null, d2: 0, hitT: -9 };
+      const fk = FRUIT_OF[name] && P.fruit[0], tr = { x: t.x, z: t.z, set: t.set, name, sp, P, s, left: fk ? fk.map((_, g) => g) : null, hide: null, h, cr, v: Math.floor(t.s * 1000) % 3, yaw: (t.s2 * 6.2832 + t.s3 * 3.1) % 6.2832, trunkR: name === 'shrub' ? 0 : sp.trunk * s * 0.95, body: null, idle: 0, want: 0, m: null, d2: 0, hitT: -9 };
       this.trees.push(tr);
       const key = (t.x / BK | 0) + ':' + (t.z / BK | 0), key2 = (Math.floor(t.x / BG)) + ':' + (Math.floor(t.z / BG));
       const kb = Math.floor(t.x / BK) + ':' + Math.floor(t.z / BK);
@@ -101,8 +113,14 @@ export class TreeField {
     for (let i = 0; i < n; i++) {
       const tr = cand[i];
       if (!tr.m) { tr.m = new Float32Array(16); const hy = tr.yaw / 2; m4.fromTRS(tr.m, [tr.x, 0, tr.z], [0, Math.sin(hy), 0, Math.cos(hy)], tr.s); }
-      r.add(tr.P.list[tr.v], tr.m, { cast: i < CAST });
+      r.add(tr.P.list[tr.v], tr.m, { cast: i < CAST, hide: tr.hide || undefined });
       this.near.push(tr);
+    }
+    for (const n of this.nuts) {
+      const b = n.body, dx = b.pos[0] - cx, dz = b.pos[2] - cz;
+      if (dx * dx + dz * dz > 150 * 150) continue;
+      m4.fromTRS(n.m, b.pos, b.q, 1);
+      r.add(this.nutMesh[n.kind][n.skin], n.m, { cast: dx * dx + dz * dz < 25 * 25 });
     }
     for (const c of this.cells) {
       if (Math.abs(c.cx - cx) > FAR + BG || Math.abs(c.cz - cz) > FAR + BG) continue;
@@ -155,6 +173,7 @@ export class TreeField {
   update(dt) {
     if (!this.fx) return;
     this.t += dt;
+    this._nuts(dt);
     this.leafT -= dt;
     if (this.leafT > 0 || !this.near.length) return;
     this.leafT = 0.11 + Math.random() * 0.16;
@@ -163,11 +182,66 @@ export class TreeField {
     const a = Math.random() * 6.2832, rr = Math.sqrt(Math.random()) * tr.cr * 0.85, y = tr.h * (0.5 + Math.random() * 0.4);
     this._spawn(tr, tr.x + Math.cos(a) * rr, y, tr.z + Math.sin(a) * rr, 0.35 + (Math.random() - 0.5) * 0.4, -0.2, 0.15 + (Math.random() - 0.5) * 0.4);
   }
+  // ---------------------------------------------------------------- fruit: shaken loose, falling, landing
+  _nuts(dt) {
+    for (let i = this.pend.length - 1; i >= 0; i--) { const q = this.pend[i]; q.t -= dt; if (q.t <= 0) { this._makeNut(q); this.pend.splice(i, 1); } }
+    for (let i = this.nuts.length - 1; i >= 0; i--) {
+      const n = this.nuts[i], b = n.body, dx = b.pos[0] - this.camX, dz = b.pos[2] - this.camZ;
+      n.age += dt;
+      if (n.age > 150 || b.pos[1] < -20 || dx * dx + dz * dz > 220 * 220) { this.world.remove(b); this.nuts.splice(i, 1); }
+    }
+    while (this.nuts.length > MAXNUT) this.world.remove(this.nuts.shift().body);
+  }
+  _makeNut(q) {
+    const F = FRUIT[q.kind], b = new Body({ mass: F.mass, pos: q.pos, fric: 0.7, rest: 0.3, linDamp: 0.01, angDamp: 0.3, group: GROUP.PROP });
+    b.addBox(F.box.map((v) => v * q.sc));
+    b.v = q.v; b.w = [(Math.random() - 0.5) * 4, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 4];
+    b.report = true; b.nut = q.kind; b.dent = true;
+    this.world.add(b);
+    this.nuts.push({ body: b, kind: q.kind, skin: Math.random() < 0.55 ? 0 : 1, m: new Float32Array(16), age: 0 });
+  }
+  // the trunk was hit at `speed` (m/s). Up to ~15 km/h: nothing; 15 - 30 km/h: sometimes one nut; 30 - 50 km/h: one or two; 50 - 72 km/h: most of the bunches; faster: every nut comes down.
+  _shake(tr, p, speed) {
+    const kind = FRUIT_OF[tr.name], left = tr.left;
+    if (!kind || !left || !left.length) return;
+    const groups = tr.P.fruit[tr.v];
+    let take = [];
+    if (speed >= 20) take = left.slice();
+    else if (speed >= 14) take = left.slice(0, Math.max(1, Math.ceil(left.length * 0.6)));
+    else {
+      const want = speed >= 8 ? 1 + (Math.random() < 0.5 ? 1 : 0) : speed >= 4 && Math.random() < (speed - 4) / 4 ? 1 : 0;
+      let got = 0; for (const g of left) { if (got >= want) break; take.push(g); got += groups[g].length; }
+    }
+    if (!take.length) return;
+    const cs = Math.cos(tr.yaw), sn = Math.sin(tr.yaw), ax = tr.x - p[0], az = tr.z - p[2], al = Math.hypot(ax, az) || 1, push = Math.min(2.5, 0.12 * speed);
+    let k = 0;
+    for (const g of take) {
+      tr.left.splice(tr.left.indexOf(g), 1);
+      (tr.hide || (tr.hide = {}))[this.W.nuts[g]] = true;
+      for (const l of groups[g]) {
+        const x = (l[0] * cs + l[2] * sn) * tr.s + tr.x, z = (-l[0] * sn + l[2] * cs) * tr.s + tr.z;
+        this.pend.push({ t: 0.04 + Math.random() * 0.3 + k++ * 0.05, kind, sc: tr.s, pos: [x, l[1] * tr.s, z], v: [ax / al * push * 0.4 + (Math.random() - 0.5) * 1.6, -0.2, az / al * push * 0.4 + (Math.random() - 0.5) * 1.6] });
+      }
+    }
+  }
+  // a fallen piece of fruit touched something. Cars take the dent through Car.impact; here: the ground. A 2 kg coconut from palm height leaves a crater in soft soil.
+  nutHit(b, e, other) {
+    if (other !== this.world.ground || e.speed < 3 || this.t - (b.dentT || -9) < 0.2) return;
+    b.dentT = this.t;
+    const F = FRUIT[b.nut], k = Math.min(1, e.speed * Math.sqrt(F.mass) / 18), x = e.p[0], z = e.p[2], so = this.world.soil;
+    if (so && so.soft(x, z)) {
+      so.dent(x, z, 0.08 + 0.08 * k, 0.012 + 0.06 * k);
+      for (let i = 0, n = 3 + ((k * 6) | 0); i < n; i++) { const c = 0.5 + Math.random() * 0.7; this.fx.clod([x, 0.04, z], [(Math.random() - 0.5) * 2.4, 0.8 + Math.random() * 2.6 * k, (Math.random() - 0.5) * 2.4], [0.16 * c, 0.09 * c, 0.045 * c]); }
+      this.fx.smoke([x, 0.08, z], [(Math.random() - 0.5) * 0.5, 0.5, (Math.random() - 0.5) * 0.5], 0.3 + 0.3 * k, 1.1, [0.5, 0.4, 0.3], 0.08);
+    }
+    if (this.sfx && this.sfx.thud) this.sfx.thud(e.p, Math.min(1, 0.25 + k * 0.6));
+  }
   // a car (or anything heavy) hit the trunk: the crown shakes, leaves rain down, bark flies, the trunk thuds
   hit(tr, p, speed) {
     if (!this.fx || this.t - tr.hitT < 0.45) return;
     tr.hitT = this.t; this.hits = (this.hits || 0) + 1;
-    const n = Math.min(45, Math.round(22 + speed * 2.4)), fx = this.fx;
+    this._shake(tr, p, speed);
+    const n = tr.name === 'palm' ? 0 : Math.min(45, Math.round(22 + speed * 2.4)), fx = this.fx;   // a palm has no small leaves to shed: its nuts fall instead
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.2832, rr = Math.sqrt(Math.random()) * tr.cr * 0.9, y = tr.h * (0.42 + Math.random() * 0.5);
       this._spawn(tr, tr.x + Math.cos(a) * rr, y, tr.z + Math.sin(a) * rr, (Math.random() - 0.5) * 1.6, -0.3 - Math.random() * 0.8, (Math.random() - 0.5) * 1.6);

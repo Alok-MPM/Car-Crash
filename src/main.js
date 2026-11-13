@@ -155,7 +155,8 @@ const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 world.onImpact = (e) => {
   scene.structures.onImpact(e);
-  { const tr = e.a.tree || e.b.tree; if (tr && e.speed > 2 && scene.land) scene.land.treeField.hit(tr, e.p, e.speed); }   // a trunk was hit: leaf shower, bark chips, thud
+  { const tr = e.a.tree || e.b.tree; if (tr && e.speed > 2 && scene.land) scene.land.treeField.hit(tr, e.p, e.speed); }   // a trunk was hit: leaf shower (nuts fall from palms), bark chips, thud
+  { const nb = e.a.nut ? e.a : e.b.nut ? e.b : null; if (nb && scene.land) scene.land.treeField.nutHit(nb, e, nb === e.a ? e.b : e.a); }   // a fallen coconut / mango landed: dent in the soil
   const ca = e.a.userData && e.a.userData.car, cb = e.b.userData && e.b.userData.car;
   if (ca) ca.impact(e, e.b, true);
   if (cb) cb.impact(e, e.a, false);
@@ -837,6 +838,8 @@ function frame(t) {
       if (w.detached || !w.grounded) { fx.skid(c.id + i + (c === player ? 'p' : c.body.id), [0, 0, 0], [0, 0, 1], 0.2, 0); return; }
       const s = Math.max(w.slipLong * 0.8, Math.abs(w.slipLat) * 2.3) * (w.Fn > 300 ? 1 : 0);
       const key = (c === player ? 'p' : c.body.id) + i;
+      // soft ground (lawn, field, soil): no rubber smoke and no black skid ribbons. The soil field prints the tread, tears grass, digs and throws clods instead.
+      if (w.soft && scene.land) { fx.skid(key, w.contact, [0, 0, 1], 0.2, 0); scene.land.soil.wheel(w, v.body, sdt, c === player); return; }
       const a = clamp((s - 0.55) / 0.5, 0, 1);
       if (a > 0.02) {
         fx.skid(key, w.contact, [-v.body.R[6], 0, -v.body.R[8]], w.tw * 0.9, a);

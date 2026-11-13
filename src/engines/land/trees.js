@@ -498,6 +498,53 @@ function conifer(c, sp, t, h, cr) {   // ashoka: tall columnar mast tree, 14 tig
   }
 }
 
+// ---------------------------------------------------------------- fruit: coconuts on palms, mangoes in mango crowns
+// An ellipsoid (long axis `ax`), rings x segments, with a slightly triangular section for coconuts. Fruit is built in 5 groups (W.nuts[k], 1+1+2+2+2 pieces) so a tree can lose
+// them one group at a time: the renderer hides a group by its part id, and the tree field spawns a falling body for every piece of that group.
+export const FRUIT_GROUPS = [1, 1, 2, 2, 2];
+export function ellipsoid(b, part, cx, cy, cz, rw, rl, ax, col, tri) {
+  const nS = 9, nR = 6, base = b.nv, e1 = norm(cross(ax, Math.abs(ax[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), e2 = cross(ax, e1);
+  for (let i = 0; i <= nR; i++) {
+    const a = (Math.PI * i) / nR, ca = Math.cos(a), sa = Math.sin(a), shade = 0.62 + 0.38 * Math.pow(Math.sin(a * 0.5 + 0.2), 0.6);
+    for (let k = 0; k < nS; k++) {
+      const th = (k / nS) * 6.2832, ct = Math.cos(th), st = Math.sin(th), rad = rw * sa * (1 + tri * Math.cos(th * 3));
+      const o = [e1[0] * ct + e2[0] * st, e1[1] * ct + e2[1] * st, e1[2] * ct + e2[2] * st];
+      const n = norm([ax[0] * ca / rl + o[0] * sa / rw, ax[1] * ca / rl + o[1] * sa / rw, ax[2] * ca / rl + o[2] * sa / rw]);
+      const sh = shade * (0.9 + 0.1 * Math.cos(th * 3));
+      b.vert(cx + ax[0] * ca * rl + o[0] * rad, cy + ax[1] * ca * rl + o[1] * rad, cz + ax[2] * ca * rl + o[2] * rad, n[0], n[1], n[2], 0, 0, col[0] * sh, col[1] * sh, col[2] * sh);
+    }
+  }
+  const gi = b.grp(part, 'paint').idx;
+  for (let i = 0; i < nR; i++) for (let k = 0; k < nS; k++) {
+    const a = base + i * nS + k, bb = base + i * nS + ((k + 1) % nS), c2 = a + nS, d = bb + nS;
+    gi.push(a, bb, d, a, d, c2);
+  }
+}
+// pieces of one fruit group on a tree: returns their local centres so the tree field can drop them from exactly where they hung
+function fruitGroups(c, kind, anchor, spread, yLo, yHi) {
+  const { b, W, rn } = c, groups = [], a0 = rn() * 6.283;
+  for (let g = 0; g < FRUIT_GROUPS.length; g++) {
+    const list = [], az = a0 + (g / FRUIT_GROUPS.length) * 6.283 + (rn() - 0.5) * 0.4;
+    for (let k = 0; k < FRUIT_GROUPS[g]; k++) {
+      const a = az + (rn() - 0.5) * 0.5, r = spread * (0.85 + 0.3 * rn()), y = yLo + (yHi - yLo) * rn();
+      const px = anchor[0] + Math.cos(a) * r, py = anchor[1] + y, pz = anchor[2] + Math.sin(a) * r;
+      if (kind === 'coconut') {
+        const ripe = rn() < 0.4, col = ripe ? [0.25 + rn() * 0.05, 0.16 + rn() * 0.04, 0.07] : [0.12 + rn() * 0.05, 0.2 + rn() * 0.05, 0.04];
+        const ax = norm([Math.cos(a) * 0.18 + (rn() - 0.5) * 0.15, -1, Math.sin(a) * 0.18 + (rn() - 0.5) * 0.15]);
+        ellipsoid(b, W.nuts[g], px, py, pz, 0.1, 0.14, ax, col, 0.07);
+        list.push([px, py, pz]);
+      } else {
+        const blush = rn() < 0.45, col = blush ? [0.5 + rn() * 0.1, 0.4 + rn() * 0.08, 0.06] : [0.22 + rn() * 0.06, 0.34 + rn() * 0.06, 0.05];
+        const ax = norm([(rn() - 0.5) * 0.3, -1, (rn() - 0.5) * 0.3]);
+        ellipsoid(b, W.nuts[g], px, py, pz, 0.055, 0.085, ax, col, 0.0);
+        list.push([px, py, pz]);
+      }
+    }
+    groups.push(list);
+  }
+  c.fruitPos = groups;
+}
+
 function palm(c, sp, t, h, cr) {   // curved ringed trunk, crownshaft, 16 arched fronds each of three hinged quads
   const { b, W, rn } = c;
   const x0 = t.x, z0 = t.z, lean = (rn() - 0.5) * 0.5, az0 = rn() * 6.283, nS = 5, sl = h / nS;
@@ -514,6 +561,7 @@ function palm(c, sp, t, h, cr) {   // curved ringed trunk, crownshaft, 16 arched
   c.cen = [P[0], P[1] - 0.2, P[2]]; c.R = cr * 2.2;
   const n = 16, Lf = cr * 2.0, wf = Lf * 0.72, segs = 3;
   tube(c, mad(P, [0, 1, 0], -0.5), mad(P, [0, 1, 0], 0.18), sp.trunk * 0.95, sp.trunk * 1.35, 6);   // crownshaft
+  fruitGroups(c, 'coconut', P, sp.trunk * 1.5 + 0.12, -0.78, -0.5);                                    // coconuts hang in bunches just under the crown
   for (let i = 0; i < n; i++) {
     const az = (i / n) * 6.283 + (rn() - 0.5) * 0.3, rv = [Math.sin(az), 0, Math.cos(az)];
     let ph = 0.5 + rn() * 0.35, q = mad(P, [0, 1, 0], 0.1);
@@ -539,6 +587,17 @@ function shrub(c, sp, t, h, cr) {
     const a = rn() * 6.283, ph = 0.25 + rn() * 0.8, d = cr * 0.25 * rn(), up = dir(ph, a), sz = size * (0.8 + rn() * 0.35);
     card(c, [x0 + Math.cos(a) * d, 0.02, z0 - Math.sin(a) * d], up, sz, sz * 0.92, CELL.shrub, rn() * 6.283);
   }
+  // flowering shrubs (ixora / hibiscus / marigold style): clusters of blossoms on the outside of the crown. The painted cluster is red-orange; the tint turns it yellow, orange, pink or deep red.
+  if (rn() < 0.7) {
+    const TINTS = [[1, 1, 1], [1, 2.4, 1], [1, 7.5, 3.5], [1, 2.4, 14], [0.85, 0.5, 0.5]], tint = TINTS[Math.floor(rn() * TINTS.length)], ao0 = c.ao0;
+    c.ao0 = 0.95;
+    const nf = 6 + Math.floor(rn() * 5);
+    for (let i = 0; i < nf; i++) {
+      const a = rn() * 6.283, ph = 0.2 + rn() * 0.7, up = dir(ph, a), rr = cr * (0.35 + rn() * 0.4), y = h * (0.35 + rn() * 0.55), sz = 0.16 + rn() * 0.12;
+      card(c, [x0 + Math.cos(a) * rr, y, z0 - Math.sin(a) * rr], up, sz, sz * 0.9, CELL.flower, rn() * 6.283, null, tint);
+    }
+    c.ao0 = ao0;
+  }
 }
 
 // b: Builder (vertices already offset), W: { trunk, leaf } part ids, name: species key in TREES, col: leaf colour multiplier
@@ -550,4 +609,6 @@ export function addTree(b, W, name, sp, t, h, cr, col) {
   else if (name === 'shrub') shrub(c, sp, t, h, cr);
   else if (name === 'babool') babool(c, sp, t, h, cr);
   else broad(c, ARCH[name] || ARCH.neem, sp, t, h, cr);
+  if (name === 'mango') fruitGroups(c, 'mango', [c.cen[0], c.cen[1], c.cen[2]], cr * 0.62, -cr * 0.55, -cr * 0.1);   // mangoes hang under the outer crown
+  return c.fruitPos || null;
 }

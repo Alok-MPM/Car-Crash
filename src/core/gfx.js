@@ -344,6 +344,11 @@ export class Renderer {
     gl.uniform4fv(u.uLP, lp); gl.uniform4fv(u.uLD, ld); gl.uniform4fv(u.uLC, lc);
     gl.uniform1i(u.uNL, nl);
     gl.uniform1f(u.uDbg, this.dbg || 0);
+    // deformable soil field (tyre prints, pits, torn grass): unit 2
+    gl.uniform1i(u.uSoil, 2);
+    gl.uniform2f(u.uEyeXZ, this.eye[0], this.eye[2]);
+    if (this.soil && this.soil.on) { gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, this.soil.tex); gl.uniform4f(u.uSoilO, this.soil.ox, this.soil.oz, this.soil.size, 1); }
+    else gl.uniform4f(u.uSoilO, 0, 0, 1, 0);
     gl.activeTexture(gl.TEXTURE0);
 
     const trans = [];

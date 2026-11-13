@@ -216,6 +216,7 @@ export class Scene {
     this.cityPlan = planCity({ seed: 7, cx: 1500, cz: -1200 });
     this.land = buildLand(r, this.cityPlan);
     this.land.treeField.attach(this.world, this.ctx.fx, this.ctx.sfx);
+    this.land.soil.attach(this.world, this.ctx.fx);
     this.streets = [];
     this.city = new CityStreamer(this.cityPlan, S);
     // end wall of the runway (stacked concrete blocks)
@@ -393,6 +394,7 @@ export class Scene {
       for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
       for (const m of this.land.holes) r.add(m, this.markModel, { cast: false });
       for (const t of this.land.furMeshes) { if (Math.abs(t.cx - cam[0]) < 800 && Math.abs(t.cz - cam[2]) < 800) r.add(t.m, this.markModel, { cast: false }); }
+      this.land.soil.draw(cam);
       this.land.treeField.draw(cam);   // pictures per 192 m cell (1 draw each) + the nearest few real 3D trees
     }
     const cx = cam[0], cz = cam[2];

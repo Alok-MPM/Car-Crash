@@ -90,23 +90,29 @@ uniform float uShadowTexel, uShadowOn;
 uniform int uKind;
 uniform vec3 uBase, uEmis;
 uniform float uMetal, uRough, uCoat, uAlpha, uTexOn, uTexScale, uFlake;
+uniform sampler2D uSoil;   // deformable soil field (toroidal, 0.125 m cells): R = dug depth, G = grass torn off, B = tyre compaction, A = loose spoil heap
+uniform vec4 uSoilO;       // window origin x, z (m), window size (m), 1 = on
+uniform vec2 uEyeXZ;       // true eye position (the fragment position is eye-relative)
 uniform float uNear2;   // kind 11 (tree pictures): squared radius around the eye inside which pictures are hidden because the real 3D tree is drawn
 uniform vec4 uLP[4], uLD[4], uLC[4];
 uniform int uNL;
 uniform float uDbg;
 ${COMMON_ENV}
 
-// ground surface relief (height of the tiny 3D detail): class 1 lawn (blades, tufts), 2 soil / mud (clods, furrows), 3 pavers (joints)
-float relief(vec2 gp, float cls){
+// band limit: an octave of f cycles per metre fades out once one pixel (pw metres) can no longer resolve it, so fine grain never aliases into shimmer while driving
+float bl(float f, float pw){ return 1. - smoothstep(0.12, 0.42, f * pw); }
+// ground surface relief (height of the tiny 3D detail): class 1 lawn (blades, tufts), 2 soil / mud (clods, furrows), 3 pavers (joints). pw = pixel size in the same units as gp
+float relief(vec2 gp, float cls, float pw){
   // every octave is isotropic (no stretched terms, so no directional streaks); a gentle domain warp keeps the value-noise grid from showing
   vec2 q = gp + vec2(vn2(gp * 2.7 + 7.), vn2(gp * 2.7 + 19.)) * 0.3;
-  if (cls < 1.5) return vn2(q * 52.) * 0.4 + vn2(q * 23. + 3.) * 0.3 + vn2(q * 9.) * 0.2 + vn2(gp * 2.3) * 0.1;           // grass: tufts and blades in every direction
+  if (cls < 1.5) return 0.5 + (vn2(q * 52.) - .5) * 0.4 * bl(52., pw) + (vn2(q * 23. + 3.) - .5) * 0.3 * bl(23., pw) + (vn2(q * 9.) - .5) * 0.2 * bl(9., pw) + (vn2(gp * 2.3) - .5) * 0.1;   // grass: tufts and blades in every direction
   if (cls < 2.5) {                                                                                                          // soil / mud: clods, crumbs, small stones
-    float stones = smoothstep(.8, .9, vn2(gp * 27. + 11.)) * 0.4;
-    return vn2(q * 3.4) * 0.42 + vn2(q * 8.1 + 5.) * 0.28 + vn2(q * 19.) * 0.15 + stones;
+    float stones = smoothstep(.8, .9, vn2(gp * 27. + 11.)) * 0.4 * bl(27., pw);
+    return 0.5 + (vn2(q * 3.4) - .5) * 0.42 + (vn2(q * 8.1 + 5.) - .5) * 0.28 * bl(8.1, pw) + (vn2(q * 19.) - .5) * 0.15 * bl(19., pw) + stones;
   }
   vec2 pj = abs(fract(gp * 0.8) - .5);
-  return -smoothstep(.45, .5, max(pj.x, pj.y)) + vn2(gp * 24.) * 0.12;
+  float jw = max(0.05, pw * 1.2);
+  return -smoothstep(.5 - jw, .5, max(pj.x, pj.y)) * (0.05 / jw) + (vn2(gp * 24.) - .5) * 0.12 * bl(24., pw) + 0.06;
 }
 float shadowPCF(vec4 sc){
   vec3 p = sc.xyz / sc.w * 0.5 + 0.5;
@@ -138,10 +144,10 @@ float vor(vec3 p, out float cellId){
   return sqrt(d2) - sqrt(d1);
 }
 
-vec3 asphalt(vec3 wp, float dist, out float rough){
+vec3 asphalt(vec3 wp, float dist, float pw, out float rough){
   vec2 p = wp.xz;
   float n1 = vn2(p*0.7), n2 = vn2(p*3.1), n3 = vn2(p*13.), n4 = vn2(p*41.);
-  float g = 0.30 + 0.07*(n1-.5) + 0.05*(n2-.5)*(1.-smoothstep(60.,220.,dist)) + 0.07*(n3-.5)*(1.-smoothstep(12.,60.,dist)) + 0.09*(n4-.5)*(1.-smoothstep(4.,22.,dist));
+  float g = 0.30 + 0.07*(n1-.5) + 0.05*(n2-.5)*bl(3.1,pw) + 0.07*(n3-.5)*bl(13.,pw) + 0.09*(n4-.5)*bl(41.,pw);
   float pch = smoothstep(.55,.7,vn2(p*0.09));
   g += pch*0.03;
   rough = 0.82 - 0.1*pch;
@@ -164,6 +170,7 @@ void main(){
   // building surfaces: one quad per face, the atlas tile repeats here (vTile = cell + 1, vUv = tile-space coordinate). Gradients are taken from the
   // unwrapped coordinate so mip level and anisotropy are the same as if the face had been cut into 1.2 m quads.
   vec2 dUx = dFdx(vUv), dUy = dFdy(vUv);
+  float pw = max(length(dFdx(vWorldMod.xz)), length(dFdy(vWorldMod.xz))) + 1e-5;   // metres per pixel on the ground
   bool tiled = vTile > 0.5;
   vec2 acell = vec2(0.);
   if (uTexOn > 0.5) {
@@ -183,16 +190,17 @@ void main(){
   }
 
   if (uKind == 4) {
-    float r; albedo = asphalt(vWorldMod * uTexScale, dist, r) * uBase; rough = r; metal = 0.; coat = 0.;
+    float r; albedo = asphalt(vWorldMod * uTexScale, dist, pw * uTexScale, r) * uBase; rough = r; metal = 0.; coat = 0.;
     if (uTexOn > 0.5) { albedo = mix(albedo, tx.rgb * uBase, tx.a); }
     float nrr = 1. - smoothstep(8., 38., dist);
     vec2 rp = vWorldMod.xz;
-    if (nrr > 0.01) {
-      // stone aggregate grain: the sun catches individual chippings and bitumen between them
+    float w65 = bl(65., pw), w180 = bl(180., pw);
+    if (nrr > 0.01 && w65 > 0.01) {
+      // stone aggregate grain: the sun catches individual chippings and bitumen between them. Only as fine as the pixels can show (w65, w180), otherwise it shimmers.
       float ge = 0.005, g0 = vn2(rp * 65.), g1 = vn2(rp * 180.);
       float gx = vn2((rp + vec2(ge, 0.)) * 65.) , gz = vn2((rp + vec2(0., ge)) * 65.), hx1 = vn2((rp + vec2(ge * 0.4, 0.)) * 180.), hz1 = vn2((rp + vec2(0., ge * 0.4)) * 180.);
-      N = normalize(N + vec3((g0 - gx) * 1.1 + (g1 - hx1) * 0.6, 0., (g0 - gz) * 1.1 + (g1 - hz1) * 0.6) * 1.7 * nrr);
-      albedo *= 1. + (g0 - .5) * 0.16 * nrr + (g1 - .5) * 0.1 * nrr;
+      N = normalize(N + vec3((g0 - gx) * 1.1 * w65 + (g1 - hx1) * 0.6 * w180, 0., (g0 - gz) * 1.1 * w65 + (g1 - hz1) * 0.6 * w180) * 1.7 * nrr);
+      albedo *= 1. + (g0 - .5) * 0.16 * nrr * w65 + (g1 - .5) * 0.1 * nrr * w180;
     }
     float conc = step(1.1, uTexScale);
     if (vCol.b > 1.5) {
@@ -206,15 +214,16 @@ void main(){
         if (conc > 0.5) {
           // concrete slab roads: transverse expansion joint every 4.5 m, longitudinal joint at every lane edge, brushed grain
           float jt = abs(fract(vUv.y / 4.5 + 0.5) - 0.5) * 4.5, lj = abs(abs(lp) - 0.5 * lw);
-          float jn = 1. - smoothstep(0.012, 0.034, min(jt, lj));
+          float jw = 0.034 + 1.5 * pw;
+          float jn = (1. - smoothstep(0.012, jw, min(jt, lj))) * (0.034 / jw);
           albedo *= 1. - 0.5 * jn; rough = mix(rough, 0.95, jn);
           float br = vn2(vec2(vUv.x * 130., vUv.y * 2.6));
-          albedo *= 1. + (br - .5) * 0.07 * nrr;
+          albedo *= 1. + (br - .5) * 0.07 * nrr * bl(130., pw);
         }
       }
     }
     // tar-sealed hairline cracks in patches (dark, a touch glossier)
-    float cm = smoothstep(.58, .72, vn2(rp * 0.045 + 3.)), ck = 1. - smoothstep(0., 0.014, abs(vn2(rp * 0.42 + 9.) - .5));
+    float cm = smoothstep(.58, .72, vn2(rp * 0.045 + 3.)), cw = 0.014 + 0.5 * pw, ck = (1. - smoothstep(0., cw, abs(vn2(rp * 0.42 + 9.) - .5))) * (0.014 / cw);
     float cvis = cm * ck * (1. - smoothstep(10., 60., dist));
     albedo *= 1. - 0.55 * cvis; rough = mix(rough, 0.42, cvis);
   } else if (uKind == 1) {
@@ -238,24 +247,72 @@ void main(){
   } else if (uKind == 7) {
     // natural ground: soil / grass / dry grass. Patchy at large scale, clods and blades up close, no repeating texture
     vec2 gp = vWorldMod.xz * uTexScale;
+    float pwg = pw * uTexScale;
     float n0 = vn2(gp*0.011), n1 = vn2(gp*0.07), n2 = vn2(gp*0.45), n3 = vn2(gp*2.4), n4 = vn2(gp*13.), n5 = vn2(gp*21. + 5.);
     float f1 = 1.-smoothstep(40.,260.,dist), f2 = 1.-smoothstep(6.,45.,dist), f3 = 1.-smoothstep(1.5,16.,dist);
-    float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3 + 0.12*(n5-.5)*f3;
+    float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3*bl(13., pwg) + 0.12*(n5-.5)*f3*bl(21., pwg);
     albedo = uBase * vCol * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
     rough = 0.97; metal = 0.; coat = 0.;
+    // ---- soil field: tyre prints, torn grass, pits, spoil heaps and the bare root zones round trees (lawns and soil only, never pavers)
+    float sMix = 0., comp = 0., dep = 0., bare = 0.;
+    if (uSoilO.w > 0.5 && uFlake > 0.5 && uFlake < 2.5) {
+      vec2 wxz = vPosRel.xz + uEyeXZ, lcw = wxz - uSoilO.xy;
+      vec2 ed = min(lcw, vec2(uSoilO.z) - lcw);
+      float sf = smoothstep(1., 9., min(ed.x, ed.y)) * (1. - smoothstep(70., 105., dist));
+      if (sf > 0.002) {
+        vec2 tc = wxz / uSoilO.z + (vec2(vn2(gp * 6.), vn2(gp * 6. + 9.)) - .5) * 0.0004;   // a little noise on the lookup: ragged, natural edges
+        float hf = 0.5 / 1024.;
+        vec4 sxp = textureLod(uSoil, tc + vec2(hf, 0.), 0.), sxm = textureLod(uSoil, tc - vec2(hf, 0.), 0.), szp = textureLod(uSoil, tc + vec2(0., hf), 0.), szm = textureLod(uSoil, tc - vec2(0., hf), 0.);
+        vec4 s0 = (sxp + sxm + szp + szm) * 0.25;
+        if (s0.r + s0.g + s0.b + s0.a > 0.001) {
+          dep = s0.r * 0.6 * sf; comp = s0.b * sf;
+          float mnd = s0.a * 0.2 * sf;
+          vec2 sgr = vec2((sxp.a - sxm.a) * 0.2 - (sxp.r - sxm.r) * 0.6, (szp.a - szm.a) * 0.2 - (szp.r - szm.r) * 0.6) / (uSoilO.z / 1024.) * sf;
+          float torn = smoothstep(0.3, 0.7, s0.g + (vn2(gp * 5.) - .5) * 0.45 + (vn2(gp * 21.) - .5) * 0.25 * bl(21., pwg));
+          bare = (uFlake < 1.5 ? torn : 0.) * sf;
+          // real soil profile: dry crust, dark moist topsoil, ochre-brown clay subsoil, pale parent material with grit. Wavy boundaries, so a pit wall shows strata.
+          float dd = dep + (vn2(gp * 9. + 3.) - .5) * 0.03 + (vn2(gp * 2.) - .5) * 0.04;
+          vec3 sc = mix(vec3(0.182, 0.097, 0.045), vec3(0.087, 0.038, 0.018), smoothstep(0., 0.05, dd));
+          sc = mix(sc, vec3(0.267, 0.121, 0.045), smoothstep(0.13, 0.19, dd));
+          sc = mix(sc, vec3(0.389, 0.241, 0.121), smoothstep(0.32, 0.4, dd));
+          float hs = relief(gp, 2., pwg);
+          sc *= 0.8 + 0.4 * hs;
+          sc = mix(sc, vec3(0.105, 0.052, 0.024) * (0.8 + 0.5 * hs), smoothstep(0.004, 0.025, mnd));   // freshly thrown loose soil is dark and crumbly
+          sMix = clamp(max(bare, uFlake < 1.5 ? smoothstep(0.03, 0.075, dep) : smoothstep(0.004, 0.02, dep)) + smoothstep(0.004, 0.025, mnd), 0., 1.);   // a rolling rut on grass stays grass (pressed); only a real hollow shows soil
+          albedo = mix(albedo, sc, sMix);
+          albedo *= 1. - 0.2 * comp * (1. - sMix) - 0.16 * comp * sMix;                                          // pressed grass / pressed soil is a little darker
+          albedo = mix(albedo, albedo * vec3(0.86, 0.96, 0.72), comp * 0.5 * (1. - sMix));
+          N = normalize(N + vec3(-sgr.x, 0., -sgr.y));
+          ao *= 1. - 0.6 * smoothstep(0.015, 0.3, dep);
+          rough = mix(rough, 0.86, sMix);
+        }
+      }
+    }
     // real 3D relief up close (fades out with distance): lawn blades and tufts, soil clods and furrows with damp glossy patches, paver joints
-    float rl = 1. - smoothstep(4., 45., dist);
+    float rl = (1. - smoothstep(4., 45., dist)) * (1. - 0.8 * comp);
     if (uFlake > 0.5 && rl > 0.01) {
-      float h0 = relief(gp, uFlake), e = 0.004;
-      float hx = relief(gp + vec2(e, 0.), uFlake), hz = relief(gp + vec2(0., e), uFlake);
+      float h0 = relief(gp, uFlake, pwg), e = 0.004;
+      float hx = relief(gp + vec2(e, 0.), uFlake, pwg), hz = relief(gp + vec2(0., e), uFlake, pwg);
       float amp = uFlake < 1.5 ? 0.9 : uFlake < 2.5 ? 1.5 : 1.2;
-      N = normalize(N + vec3(h0 - hx, 0., h0 - hz) * amp * rl * 3.);
+      N = normalize(N + vec3(h0 - hx, 0., h0 - hz) * amp * rl * 3. * (1. - 0.6 * sMix));
       if (uFlake < 1.5) {
         // meadow: rich emerald, clover patches and sun-dried blade tips, tuft by tuft
         float dry = smoothstep(.55, .8, vn2(gp * 0.9 + 3.)), clov = smoothstep(.6, .75, vn2(gp * 1.6 + 11.)), tuft = vn2(gp * 5.3);
-        albedo *= (1. + (h0 - .5) * 0.34 * rl) * mix(vec3(0.9, 1.1, 0.84), vec3(1.2, 1.04, 0.62), dry * (0.35 + 0.65 * h0));
-        albedo = mix(albedo, albedo * vec3(0.8, 1.2, 0.9), clov * 0.5 * rl);
-        albedo *= 0.88 + 0.24 * tuft * rl + 0.12 * (1. - rl);
+        vec3 gA = albedo * (1. + (h0 - .5) * 0.34 * rl) * mix(vec3(0.9, 1.1, 0.84), vec3(1.2, 1.04, 0.62), dry * (0.35 + 0.65 * h0));
+        gA = mix(gA, gA * vec3(0.8, 1.2, 0.9), clov * 0.5 * rl);
+        gA *= 0.88 + 0.24 * tuft * rl + 0.12 * (1. - rl);
+        albedo = mix(gA, albedo, sMix);
+        // wildflowers: sparse little blossoms in patches (white, yellow, pink, violet, orange), only where the pixels can resolve them
+        float wfp = smoothstep(.62, .8, vn2(gp * 0.05 + 31.)) * bl(24., pwg) * (1. - sMix);
+        if (wfp > 0.01) {
+          vec2 fcl = gp * 8., fi = floor(fcl), ff = fract(fcl) - .5;
+          if (h21(fi + 7.) > 0.86) {
+            vec2 fo = (vec2(h21(fi + 1.3), h21(fi + 5.7)) - .5) * 0.5;
+            float fm = (1. - smoothstep(0.07, 0.14, length(ff - fo))) * wfp, ci = h21(fi + 11.);
+            vec3 fcol = ci < 0.3 ? vec3(0.85, 0.83, 0.74) : ci < 0.55 ? vec3(0.9, 0.62, 0.04) : ci < 0.75 ? vec3(0.8, 0.18, 0.35) : ci < 0.9 ? vec3(0.3, 0.15, 0.6) : vec3(0.9, 0.3, 0.03);
+            albedo = mix(albedo, fcol, fm);
+          }
+        }
       }
       else if (uFlake < 2.5) {
         float damp = smoothstep(.5, .75, vn2(gp * 0.16 + 4.));

@@ -43,6 +43,15 @@ export class FX {
   leaf(p, v, c) {
     this.add({ m: 4, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.05 + Math.random() * 0.045, g: 0, life: 8 + Math.random() * 5, t: 0, c: [c[0], c[1], c[2]], a: 1, drag: 0.7, up: -2.2, seed: Math.random() * 10, rot: Math.random() * 6, rv: (Math.random() - 0.5) * 5, fl: Math.random() * 6.28, landed: false });
   }
+  // a clod of soil thrown by a spinning wheel or a landing object: tumbles, bounces once or twice, lies a moment and fades
+  clod(p, v, c) {
+    this.add({ m: 3, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.02 + Math.random() * 0.04, g: 0, life: 1.6 + Math.random() * 1.6, t: 0, c: [c[0], c[1], c[2]], a: 1, drag: 0.15, up: -9.8, seed: Math.random(), rot: Math.random() * 6, rv: (Math.random() - 0.5) * 12, bounce: 0.22, solid: true });
+  }
+  // a torn tuft of grass with its root ball: flies like a clod, but it is a leaf-shaped blade bunch (mode 4, ballistic)
+  tuft(p, v, c) {
+    const k = 0.8 + Math.random() * 0.5;
+    this.add({ m: 4, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.055 + Math.random() * 0.05, g: 0, life: 1.6 + Math.random() * 1.2, t: 0, c: [c[0] * k, c[1] * k, c[2] * k], a: 1, drag: 0.25, up: -9.8, seed: Math.random() * 10, rot: Math.random() * 6, rv: (Math.random() - 0.5) * 14, fl: 0, landed: false, bal: true });
+  }
   glass(p, v) {
     this.add({ m: 3, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.02 + Math.random() * 0.04, g: 0, life: 6 + Math.random() * 6, t: 0, c: [0.7, 0.85, 0.9], a: 1, drag: 0.05, up: -9.8, seed: Math.random(), rot: Math.random() * 6, rv: (Math.random() - 0.5) * 10, bounce: 0.25, solid: true });
   }
@@ -68,9 +77,11 @@ export class FX {
       if (p.rv) p.rot += p.rv * dt;
       if (p.m === 4) {
         if (p.landed) { p.v[0] = p.v[1] = p.v[2] = 0; p.rv = 0; continue; }
-        if (p.v[1] < -1.15) p.v[1] = -1.15;                                              // light and wide: terminal speed about 1 m/s
-        p.v[0] += Math.cos(p.t * 2.3 + p.fl) * 1.5 * dt; p.v[2] += Math.sin(p.t * 1.8 + p.fl * 1.3) * 1.2 * dt;   // side-to-side flutter
-        if (p.p[1] < 0.03) { p.p[1] = 0.03; p.landed = true; p.life = Math.min(p.life, p.t + 5 + Math.random() * 3); }
+        if (!p.bal) {
+          if (p.v[1] < -1.15) p.v[1] = -1.15;                                              // light and wide: terminal speed about 1 m/s
+          p.v[0] += Math.cos(p.t * 2.3 + p.fl) * 1.5 * dt; p.v[2] += Math.sin(p.t * 1.8 + p.fl * 1.3) * 1.2 * dt;   // side-to-side flutter
+        }
+        if (p.p[1] < 0.03) { p.p[1] = 0.03; p.landed = true; p.life = Math.min(p.life, p.t + (p.bal ? 0.6 : 5) + Math.random() * 3); }
         continue;
       }
       if (p.bounce !== undefined && p.p[1] < 0.02) {

@@ -353,7 +353,21 @@ export class Vehicle {
       origin[1] = b.pos[1] + R[1] * m[0] + R[4] * m[1] + R[7] * m[2];
       origin[2] = b.pos[2] + R[2] * m[0] + R[5] * m[1] + R[8] * m[2];
       w.origin = [origin[0], origin[1], origin[2]];
-      const hit = this.world.raycastStatic(origin, [-up[0], -up[1], -up[2]], w.L0 + w.R);
+      // soft ground (lawn, field, bare soil) can be dug out below the y = 0 plane or heaped above it: the ray looks a little further and the hit is moved to the soil surface
+      const so = this.world.soil, rmax = w.L0 + w.R;
+      let hit = this.world.raycastStatic(origin, [-up[0], -up[1], -up[2]], so ? rmax + so.ext : rmax);
+      w.soft = false; w.sink = 0;
+      if (hit && hit.ground && so && up[1] > 0.4) {
+        const px = origin[0] - up[0] * hit.t, pz = origin[2] - up[2] * hit.t;
+        if (so.soft(px, pz)) {
+          w.soft = true;
+          const hh = so.heightAt(px, pz);
+          w.sink = -hh;
+          if (hh !== 0) hit = { t: hit.t - hh / up[1], n: hit.n, ground: true };
+        }
+      }
+      w.surface = w.soft ? 1 : 0;
+      if (hit && hit.t > rmax) hit = null;
       if (hit) {
         w.hit = hit;
         const sl = hit.t - w.R;
@@ -509,7 +523,7 @@ export class Vehicle {
       if (this.assist >= 1 && brk > 0.02 && kappa < -0.15 && inp.handbrake < 0.1 && inp.throttle < 0.4) { Tb *= 0.12; this.absAct = 1; }
       // disc heat: brake power in, airflow cooling out
       w.bTemp = (w.bTemp || 25) + (Tb * Math.abs(w.omega) * dt) / 4200 - ((w.bTemp || 25) - 25) * (0.008 + 0.0025 * speed) * dt;
-      const Trr = 0.013 * Fn * w.R;
+      const Trr = (0.013 + (w.soft ? 0.03 + 0.5 * Math.max(0, w.sink) : 0)) * Fn * w.R;   // soft ground and ruts: the tyre has to climb its own hollow
       const sg = clamp(w.omega / 0.12, -1, 1);
       const Tres = (Tb + Trr) * sg;
       const dOm = (Tdrive - Tres - w.R * Fx) / (Iw / dt + w.R * D);

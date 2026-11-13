@@ -535,7 +535,7 @@ export class World {
     let best = null;
     if (this.groundOn && d[1] < -1e-6) {
       const t = -o[1] / d[1];
-      if (t >= 0 && t <= maxT) best = { t, n: [0, 1, 0] };
+      if (t >= 0 && t <= maxT) best = { t, n: [0, 1, 0], ground: true };
     }
     for (const b of this.statics) {
       for (const s of b.shapes) {
