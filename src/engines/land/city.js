@@ -185,7 +185,7 @@ const TINT = (c, m) => c.map((v) => v * m);
 const NUT = { kind: 0, base: [1, 1, 1], rough: 0.78, doubleSided: true };
 const MATS = () => ({
   [P.dry]: { kind: 7, base: GROUND.grassDry.color, texScale: 1 },
-  [P.grass]: { kind: 7, flake: 1, base: GROUND.grass.color, texScale: 1, poly: 1 },
+  [P.grass]: { kind: 7, flake: 1, base: GROUND.grass.color, texScale: 1, poly: 1, under: true },
   [P.soil]: { kind: 7, flake: 2, base: GROUND.soil.color, texScale: 1, poly: 1 },
   [P.embank]: { kind: 7, flake: 2, base: GROUND.embank.color, texScale: 1, poly: 2 },
   [P.plough]: { kind: 7, flake: 2, base: GROUND.plough.color, texScale: 1, poly: 1 },
@@ -341,18 +341,30 @@ export function buildLand(r, plan) {
   };
   // the deformable soil layer: where the ground is soft (everything but road, paver, floor, building and water) and the bare root zones round the garden trees
   const inR = (x, z, x0, z0, x1, z1, m) => x > x0 - m && x < x1 + m && z > z0 - m && z < z1 + m;
+  // isHard(x, z): true where the ground is NOT deformable lawn: roads (+ verge), pavers, floors, ponds, crop fields, planting beds and bare-earth strips (their ground sheets carry their own look).
+  // Every rectangle is registered once in a 24 m bucket grid, so a query only looks at the handful of shapes in its own bucket (the soil map asks for ~1000 points per 4 m block).
+  const IG = 24, ik = (x, z) => ((Math.floor(x / IG) + 4096) << 14) | (Math.floor(z / IG) + 4096);
+  const idxH = new Map(), idxL = new Map(), idxB = new Map();
+  const put = (map, x0, z0, x1, z1) => { const r = [x0, z0, x1, z1]; for (let i = Math.floor(x0 / IG); i <= Math.floor(x1 / IG); i++) for (let j = Math.floor(z0 / IG); j <= Math.floor(z1 / IG); j++) { const k = ((i + 4096) << 14) | (j + 4096); let l = map.get(k); if (!l) map.set(k, l = []); l.push(r); } };
+  for (const r of plan.roads) { const m = r.type === 'highway' || r.type === 'expressway' ? 2.5 : 1.3, hw = r.w / 2 + m; if (r.axis === 'x') put(idxH, r.a0 - m, r.c - hw, r.a1 + m, r.c + hw); else put(idxH, r.c - hw, r.a0 - m, r.c + hw, r.a1 + m); }
+  for (const p of plan.pads) { put(idxH, p.x0 - 0.3, p.z0 - 0.3, p.x1 + 0.3, p.z1 + 0.3); put(idxH, p.apron[0] - 0.3, p.apron[1] - 0.3, p.apron[2] + 0.3, p.apron[3] + 0.3); }
+  for (const w of plan.walks) put(idxH, w[0] - 0.2, w[1] - 0.2, w[2] + 0.2, w[3] + 0.2);
+  for (const c of plan.chowks) put(idxH, c.x0 - 0.3, c.z0 - 0.3, c.x1 + 0.3, c.z1 + 0.3);
+  for (const l of plan.lots) put(idxH, l.x - l.w / 2 - 0.2, l.zFront - l.d - 0.2, l.x + l.w / 2 + 0.2, l.zFront + 0.2);
+  for (const f of plan.fields) put(idxH, f.x0 - 0.05, f.z0 - 0.05, f.x1 + 0.05, f.z1 + 0.05);
+  for (const w of plan.beds) put(idxB, w[0] - 0.1, w[1] - 0.1, w[2] + 0.1, w[3] + 0.1);
+  for (const l of plan.lawns) put(idxL, l.x0 + 0.1, l.z0 + 0.1, l.x1 - 0.1, l.z1 - 0.1);
+  const inRect = (l, x, z) => { for (let i = 0; i < l.length; i++) { const r = l[i]; if (x > r[0] && x < r[2] && z > r[1] && z < r[3]) return true; } return false; };
   const isHard = (x, z) => {
-    // inside the tarmac plane (proving ground + city) the ground is asphalt except where a lawn or a planting bed lies on it
+    const k = ik(x, z), B = idxB.get(k);
+    if (B && inRect(B, x, z)) return true;
     if (plan.paved(x, z)) {
-      for (const l of plan.lawns) if (inR(x, z, l.x0, l.z0, l.x1, l.z1, -0.1)) return false;
-      for (const w of plan.beds) if (inR(x, z, w[0], w[1], w[2], w[3], -0.1)) return false;
-      return true;
+      // inside the tarmac plane (proving ground + city) the ground is asphalt except where a lawn lies on it (planting beds carry their own mulch sheet: not deformable)
+      const L = idxL.get(k);
+      return !(L && inRect(L, x, z));
     }
-    if (plan.roadAt(x, z) || plan.roadAt(x + 1.2, z) || plan.roadAt(x - 1.2, z) || plan.roadAt(x, z + 1.2) || plan.roadAt(x, z - 1.2)) return true;
-    for (const p of plan.pads) { if (inR(x, z, p.x0, p.z0, p.x1, p.z1, 0.3) || inR(x, z, p.apron[0], p.apron[1], p.apron[2], p.apron[3], 0.3)) return true; }
-    for (const w of plan.walks) if (inR(x, z, w[0], w[1], w[2], w[3], 0.2)) return true;
-    for (const c of plan.chowks) if (inR(x, z, c.x0, c.z0, c.x1, c.z1, 0.3)) return true;
-    for (const l of plan.lots) if (inR(x, z, l.x - l.w / 2, l.zFront - l.d, l.x + l.w / 2, l.zFront, 0.2)) return true;
+    const H = idxH.get(k);
+    if (H && inRect(H, x, z)) return true;
     for (const p of plan.ponds) if (((x - p.x) / (p.rx + 0.5)) ** 2 + ((z - p.z) / (p.rz + 0.5)) ** 2 < 1) return true;
     return false;
   };

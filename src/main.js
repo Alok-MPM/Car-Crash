@@ -783,6 +783,7 @@ function stepPhysics(real) {
   }
   if (acc > H * 4) acc = 0;
 }
+let gLow = 0, gHigh = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const now = t / 1000;
@@ -810,6 +811,14 @@ function frame(t) {
     if (r.dprScale < dm) { r.dprScale = Math.min(dm, r.dprScale + 0.05); resize(); }
     else if (load < 1) { ctx.load = Math.min(1, load + 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
   }
+  // grass density: its own small governor (never thins grass for one slow frame; steps down when the average stays under ~24 fps, creeps back up when there is room)
+  if (!warm && dt <= 0.09 && scene.land && scene.land.soil) {
+    const gg = Math.min(goal, 30), so = scene.land.soil, gmax = [0.55, 0.8, 1][S.quality];
+    if (fpsNow < gg * 0.8) { gLow += dt; gHigh = 0; } else if (fpsNow > gg * 0.95) { gHigh += dt; gLow = 0; } else { gLow = gHigh = 0; }
+    if (gLow > 1.5) { gLow = 0; so.grassK = Math.max(0.15, so.grassK - 0.15); }
+    if (gHigh > 5) { gHigh = 0; so.grassK = Math.min(gmax, so.grassK + 0.05); }
+    if (so.grassK > gmax) so.grassK = gmax;
+  }
   soundBudget = 5;
   scrape = 0;
   readInput(dt);
@@ -826,6 +835,7 @@ function frame(t) {
   updateLiftCard(person.active ? scene.structures.liftUI(person) : null);
   const _t2 = performance.now();
   for (const c of cars) c.update(sdt);
+  fx.cars = cars; fx.world = world;
   fx.update(sdt);
   const _t3 = performance.now();
   PF.ph = PF.ph * 0.9 + (_t1 - _t0) * 0.1; PF.up = PF.up * 0.9 + (_t2 - _t1) * 0.1; PF.fx = PF.fx * 0.9 + (_t3 - _t2) * 0.1;
@@ -893,6 +903,11 @@ function frame(t) {
   person.draw();
   for (const d of deb) drawDebris(ctx, d);
   fx.collect(r);
+  { // cars close to the eye press the grass flat under their bodies
+    const gc = [];
+    for (const c of cars) { const b = c.body, d = Math.hypot(b.pos[0] - camPos[0], b.pos[2] - camPos[2]); if (d < 40 && c.spec && c.spec.geo) { const f = Math.hypot(-b.R[6], -b.R[8]) || 1; gc.push([d, b.pos[0], b.pos[2], -b.R[6] / f, -b.R[8] / f, c.spec.geo.L * 0.5, c.spec.geo.W * 0.5]); } }
+    gc.sort((a, b2) => a[0] - b2[0]); r.grassCars = gc.slice(0, 6).map((g) => g.slice(1));
+  }
   // lights
   if (S.tod === 'night' || S.tod === 'overcast' && false) {
     const b = player.body, f = [-b.R[6], -b.R[7], -b.R[8]];

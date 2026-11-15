@@ -51,7 +51,10 @@ export class Renderer {
       sky: program(gl, S.VS_SKY, S.FS_SKY),
       part: program(gl, S.VS_PART, S.FS_PART),
       decal: program(gl, S.VS_DECAL, S.FS_DECAL),
+      grass: program(gl, S.VS_GRASS, S.FS_GRASS),
     };
+    this.grassMesh = this._makeGrassMesh(8); this.grassMeshFar = this._makeGrassMesh(5); this.grassMeshTri = this._makeGrassMesh(8, true);
+    this.grassCfg = null;
     this.aniso = gl.getExtension('EXT_texture_filter_anisotropic');
     this.emptyVAO = gl.createVertexArray();
     this.setShadowSize(this.quality >= 2 ? 2048 : this.quality === 1 ? 1024 : 0);
@@ -347,8 +350,12 @@ export class Renderer {
     // deformable soil field (tyre prints, pits, torn grass): unit 2
     gl.uniform1i(u.uSoil, 2);
     gl.uniform2f(u.uEyeXZ, this.eye[0], this.eye[2]);
-    if (this.soil && this.soil.on) { gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, this.soil.tex); gl.uniform4f(u.uSoilO, this.soil.ox, this.soil.oz, this.soil.size, 1); }
-    else gl.uniform4f(u.uSoilO, 0, 0, 1, 0);
+    gl.uniform1i(u.uMeta, 3);
+    if (this.soil && this.soil.on) {
+      gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, this.soil.tex); gl.uniform4f(u.uSoilO, this.soil.ox, this.soil.oz, this.soil.size, 1);
+      gl.activeTexture(gl.TEXTURE0 + 3); gl.bindTexture(gl.TEXTURE_2D, this.soil.meta);
+      const pc = this.soil.patch; gl.uniform4f(u.uTerrC, pc.cx, pc.cz, pc.half - 0.03, 1);
+    } else { gl.uniform4f(u.uSoilO, 0, 0, 1, 0); gl.uniform4f(u.uTerrC, 0, 0, 0, 0); }
     gl.activeTexture(gl.TEXTURE0);
 
     const trans = [];
@@ -390,6 +397,8 @@ export class Renderer {
         this.stats.draws++; this.stats.tris += g.count / 3;
       }
     }
+    // real grass (instanced tufts rooted in the soil field)
+    this._drawGrass();
     // decals (skid marks, contact blobs)
     this._drawDecals();
     // transparent
@@ -413,6 +422,64 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
 
+  // one grass tuft = K blades x 5 vertices (base L/R, middle L/R, tip); everything else (position, height, bend, colour) is computed per instance in the vertex shader
+  _makeGrassMesh(K, tri) {   // tri: one triangle per blade (3 vertices: base L, base R, tip) for short turf
+    const gl = this.gl, V = tri ? 3 : 5, v = new Float32Array(K * V * 4), idx = new Uint16Array(K * (tri ? 3 : 9));
+    for (let b = 0; b < K; b++) {
+      const a = ((b + 0.37) / K) * 6.28318, rx = Math.cos(a), rz = Math.sin(a);
+      for (let c = 0; c < V; c++) { const o = (b * V + c) * 4; v[o] = rx; v[o + 1] = rz; v[o + 2] = b; v[o + 3] = tri ? [0, 1, 4][c] : c; }
+      const q = b * V;
+      if (tri) idx.set([q, q + 1, q + 2], b * 3); else idx.set([q, q + 1, q + 2, q + 1, q + 3, q + 2, q + 2, q + 3, q + 4], b * 9);
+    }
+    const m = { vao: gl.createVertexArray(), n: idx.length };
+    gl.bindVertexArray(m.vao);
+    const bf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, bf); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0);
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return m;
+  }
+  // grass: two instanced layers (near: 0.25 m cells 16 m round the eye; far ring: 0.5 m cells over the terrain patch). cfg = {density 0..1.2, near blades, far blades}
+  _drawGrass() {
+    const G = this.grassCfg, so = this.soil;
+    if (!G || !so || !so.on || G.density < 0.03) return;
+    const gl = this.gl, P = this.progs.grass, u = P.u, e = this.eye;
+    gl.useProgram(P.p);
+    this._setEnv(P);
+    gl.uniformMatrix4fv(u.uVP, false, this.vp);
+    gl.uniformMatrix4fv(u.uLightVP, false, this.lightVP);
+    gl.uniform3f(u.uEye, e[0], e[1], e[2]);
+    gl.uniform4f(u.uSoilO, so.ox, so.oz, so.size, 1);
+    gl.uniform1f(u.uShadowOn, this.shadowTex ? 1 : 0);
+    gl.uniform1i(u.uShadowMap, 1); gl.uniform1i(u.uSoil, 2); gl.uniform1i(u.uMeta, 3);
+    const gc = this.grassCars || [], ca = (this._gcA = this._gcA || new Float32Array(24)), cb = (this._gcB = this._gcB || new Float32Array(24));
+    ca.fill(0); cb.fill(0);
+    for (let i = 0; i < gc.length && i < 6; i++) { ca.set([gc[i][0], gc[i][1], gc[i][2], gc[i][3]], i * 4); cb.set([gc[i][4], gc[i][5], 0, 0], i * 4); }
+    gl.uniform4fv(u.uCarA, ca); gl.uniform4fv(u.uCarB, cb); gl.uniform1f(u.uNCars, Math.min(6, gc.length));
+    gl.activeTexture(gl.TEXTURE0 + 1); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex || this.dummyShadow);
+    gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, so.tex);
+    gl.activeTexture(gl.TEXTURE0 + 3); gl.bindTexture(gl.TEXTURE_2D, so.meta);
+    gl.activeTexture(gl.TEXTURE0);
+    const pix = 2 / (this.proj[5] * this.h), dn = Math.min(1, G.density);
+    const layer = (mesh, cx, cz, cs, n, half, lay, blades, c0) => {
+      const ox = Math.round(cx / cs) - n / 2, oz = Math.round(cz / cs) - n / 2, cnt = Math.ceil(n * n * dn), wx = ox * cs + n * cs / 2, wz = oz * cs + n * cs / 2;
+      gl.bindVertexArray(mesh.vao);
+      gl.uniform4f(u.uG, cs, n, ox, oz); gl.uniform4f(u.uC, wx, wz, n * cs / 2, lay); gl.uniform4f(u.uC0, c0[0], c0[1], c0[2], blades);
+      gl.uniform4f(u.uP, 1, 1, pix, 0);
+      gl.drawElementsInstanced(gl.TRIANGLES, mesh.n, gl.UNSIGNED_SHORT, 0, cnt);
+      this.stats.draws++; this.stats.tris += mesh.n / 3 * cnt * 0.5;
+    };
+    gl.disable(gl.CULL_FACE); gl.disable(gl.POLYGON_OFFSET_FILL);
+    const cs0 = 0.25, c0x = Math.round(e[0] / cs0) * cs0, c0z = Math.round(e[2] / cs0) * cs0, c0 = [c0x, c0z, 8];
+    // layer 2: dense short turf (72 x 72 cells of 0.12 m, one triangle blades), layer 0: tufts 64 x 64 of 0.25 m (16 m), layer 1: far ring 80 x 80 of 0.45 m (36 m) over the terrain patch
+    layer(this.grassMeshTri, e[0], e[2], 0.12, 72, 4.3, 2, 8, c0);
+    layer(this.grassMesh, c0x, c0z, cs0, 64, 8, 0, 8, c0);
+    if (G.far > 0) layer(this.grassMeshFar, so.patch.cx, so.patch.cz, 0.45, 80, 18, 1, 5, c0);
+    gl.enable(gl.CULL_FACE);
+    gl.bindVertexArray(null);
+    gl.useProgram(this.progs.main.p);
+  }
+
   _setMat(u, m) {
     const gl = this.gl;
     gl.uniform1i(u.uKind, m.kind | 0);
@@ -428,6 +495,7 @@ export class Renderer {
     gl.uniform1f(u.uTexScale, m.texScale || 1);
     gl.uniform1f(u.uNear2, m.near2 || 0);
     gl.uniform1f(u.uSway, m.sway || 0);
+    gl.uniform1f(u.uTerr, m.terr ? 1 : 0); gl.uniform1f(u.uUnder, m.under ? 1 : 0);
     if (m.tex) { gl.uniform1f(u.uTexOn, 1); gl.bindTexture(gl.TEXTURE_2D, m.tex); } else gl.uniform1f(u.uTexOn, 0);
     if (m.doubleSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
     if (m.poly) { const lv = m.poly === true ? 2 : m.poly; gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-lv, -3 * lv); } else gl.disable(gl.POLYGON_OFFSET_FILL);
