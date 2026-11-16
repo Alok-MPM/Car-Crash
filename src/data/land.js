@@ -43,8 +43,9 @@ export const TREES = {
   ashoka:   { kind: 'conifer', h: [7, 11],    crown: [1.4, 2.0], trunk: 0.18, leaf: [[0.1, 0.26, 0.09], [0.12, 0.3, 0.1]] },
   palm:     { kind: 'palm',    h: [7, 11],    crown: [1.4, 2.0], trunk: 0.14, leaf: [[0.12, 0.28, 0.08], [0.15, 0.32, 0.09]] },
   shrub:    { kind: 'broad',   h: [0.9, 1.6], crown: [0.45, 0.85], trunk: 0.04, leaf: [[0.1, 0.25, 0.07], [0.14, 0.3, 0.08]] },
+  apple:    { kind: 'broad',   h: [3.6, 5.0], crown: [2.2, 3.0], trunk: 0.17, leaf: [[0.14, 0.3, 0.07], [0.17, 0.34, 0.08]] },   // orchard tree: gnarled boughs, serrated leaves, red apples
 };
-export const TREE_SETS = { front: ['neem', 'mango', 'gulmohar', 'ashoka', 'neem', 'palm', 'gulmohar'], frontBig: ['neem', 'mango', 'banyan', 'gulmohar', 'palm', 'ashoka', 'mango'], side: ['ashoka', 'ashoka', 'babool', 'palm'], shrub: ['shrub'], street: ['neem', 'gulmohar', 'ashoka', 'neem', 'gulmohar'], park: ['mango', 'gulmohar', 'neem', 'ashoka', 'banyan'], farm: ['mango', 'babool', 'neem', 'babool'], village: ['neem', 'banyan', 'mango', 'neem', 'ashoka', 'babool'], forest: ['neem', 'mango', 'ashoka', 'babool', 'gulmohar', 'banyan'] };
+export const TREE_SETS = { front: ['neem', 'mango', 'gulmohar', 'ashoka', 'neem', 'palm', 'gulmohar', 'apple'], frontBig: ['neem', 'mango', 'banyan', 'gulmohar', 'palm', 'ashoka', 'mango'], side: ['ashoka', 'ashoka', 'babool', 'palm'], shrub: ['shrub'], street: ['neem', 'gulmohar', 'ashoka', 'neem', 'gulmohar'], park: ['mango', 'gulmohar', 'neem', 'ashoka', 'banyan', 'apple', 'apple'], farm: ['mango', 'babool', 'neem', 'babool', 'apple', 'apple'], village: ['neem', 'banyan', 'mango', 'neem', 'ashoka', 'babool', 'apple'], forest: ['neem', 'mango', 'ashoka', 'babool', 'gulmohar', 'banyan'] };
 
 // parking pad beside a house: bays, paver colour
 export const PARKING = { bayW: 2.7, bayD: 5.2, apron: 1.0 };

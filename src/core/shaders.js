@@ -69,16 +69,40 @@ void main(){
     float ef = 1. - smoothstep(0.8, 1., max(abs(aPos.x), abs(aPos.z)) / 17.9);
     p.y += (sv.a * 0.2 - sv.r * 0.6) * ef;
   }
-  if (uSway > 0.) {
-    // wind on foliage meshes: the crown leans and eases with slow gusts (more with height), every leaf card also flutters a little. A few cm to ~15 cm, vertex shader only.
-    vec3 wp = p.xyz + uEyeMod;
-    float hh = max(aPos.y, 0.);
-    float gust = sin(uTime * 1.25 + wp.x * 0.11 + wp.z * 0.09) * 0.6 + sin(uTime * 2.3 + wp.x * 0.23) * 0.4;
-    float lean = 0.0016 * hh * hh * gust;
-    float fl = sin(uTime * 6.5 + wp.x * 2.9 + wp.z * 3.7 + wp.y * 2.3);
-    p.x += lean + fl * 0.014; p.z += lean * 0.6 + fl * 0.01; p.y += fl * 0.008;
-  }
   vec3 n = normalize(mat3(uModel) * aNrm);
+  if (uSway > 0.) {
+    // wind, all in the vertex shader. One gust per tree (phase from where the tree stands, so a gust travels through a row of trees), then three layers:
+    //  1) the whole tree leans downwind, more with height (trunk, branches, leaves and fruit all get the same lean, nothing tears apart)
+    //  2) every branch swings on its own: a smooth field of the position inside the crown, so a twig and its leaves move together and neighbours differ
+    //  3) every leaf flutters by itself: its own speed and phase come from its seed (aTile = type*4096 + seed + weight, weight 0 at the stalk, up to ~1 at the tip)
+    float t = uTime;
+    vec3 org = uModel[3].xyz + uEyeMod;
+    float hh = min(max(aPos.y, 0.), 16.);
+    vec2 wd = vec2(0.87, 0.49);
+    float ph = dot(org.xz, wd) * 0.13;
+    float gust = 0.55 * sin(t * 0.9 - ph) + 0.3 * sin(t * 1.9 - ph * 1.7 + 1.3) + 0.15 * sin(t * 3.4 - ph * 2.3);
+    float push = 0.62 + 0.38 * gust;
+    float lean = 0.0015 * hh * hh * push, side = 0.0005 * hh * hh * sin(t * 1.3 - ph * 1.2 + 0.7);
+    p.x += wd.x * lean - wd.y * side; p.z += wd.y * lean + wd.x * side;
+    float hf = smoothstep(0.8, 3., hh), rad = length(aPos.xz) * 0.8 + hh * 0.12;
+    vec3 q = aPos * 1.7;
+    float b1 = sin(t * 2.1 + q.x * 1.3 + q.y * 0.9 + q.z * 1.1 + ph * 3.), b2 = sin(t * 3.1 + q.z * 1.7 - q.x * 1.1 + q.y * 1.4 + 1.7 + ph * 2.);
+    float ba = (0.012 + 0.03 * push) * hf * rad;
+    p.x += (b1 * 0.8 + b2 * 0.5) * ba; p.z += (b2 * 0.8 - b1 * 0.3) * ba; p.y += b1 * b2 * ba * 0.15;
+    if (uSway < 1.5 || uSway > 2.5) {
+      float ty = floor(aTile / 4096.), r0 = aTile - ty * 4096., sd = floor(r0), w = r0 - sd;
+      if (uSway < 1.5) {
+        float f1 = sin(t * (6. + fract(sd * 0.137) * 4.) + sd * 2.399 + gust * 1.5), f2 = sin(t * (8.3 + fract(sd * 0.291) * 3.) + sd * 1.13);
+        float la = (0.4 + 0.6 * push) * w * 0.09;
+        p.xyz += n * f1 * la + vec3(f2 * 0.6, f1 * f2 * 0.3, f2 * 0.4) * la * 0.5;
+      } else {
+        // hanging fruit: swings from its stalk like a pendulum, heavier fruit more slowly
+        float big = ty > 4.5 && ty < 5.5 ? 3.2 : (ty > 3.5 && ty < 4.5 ? 2.2 : 1.), sw = w * (0.012 + 0.02 * push) * big;
+        float s1 = sin(t * (2.6 / sqrt(big)) + sd * 0.77 - ph), s2 = sin(t * (3.1 / sqrt(big)) + sd * 1.31);
+        p.x += sw * (wd.x * (0.6 + 0.4 * s1) - wd.y * 0.5 * s2); p.z += sw * (wd.y * (0.6 + 0.4 * s1) + wd.x * 0.5 * s2);
+      }
+    }
+  }
   vPosRel = p.xyz; vNrm = n; vCol = aCol; vUv = aUv; vLocal = aPos; vTile = aTile;
   vWorldMod = p.xyz + uEyeMod;
   vShadow = uLightVP * vec4(p.xyz + n * uNBias, 1.);
@@ -217,7 +241,7 @@ void main(){
   // unwrapped coordinate so mip level and anisotropy are the same as if the face had been cut into 1.2 m quads.
   vec2 dUx = dFdx(vUv), dUy = dFdy(vUv);
   float pw = max(length(dFdx(vWorldMod.xz)), length(dFdy(vWorldMod.xz))) + 1e-5;   // metres per pixel on the ground
-  bool tiled = vTile > 0.5;
+  bool tiled = vTile > 0.5 && uKind != 10 && uKind != 11 && uKind != 12;
   vec2 acell = vec2(0.);
   if (uTexOn > 0.5) {
     if (tiled) {
@@ -228,11 +252,18 @@ void main(){
       tx = textureGrad(uTex, auv, dUx * vec2(0.244, -0.244), dUy * vec2(0.244, -0.244));
     } else tx = texture(uTex, vUv);
   }
-  if (uKind == 10 && tx.a < 0.42) discard;   // every leaf is cut out: sky shows through the canopy
+  if (uKind == 10) {
+    // every leaf is cut out: sky shows through the canopy. Far away the mip chain thins the alpha of narrow leaflets, so the cut-off relaxes with the mip level and they do not melt away.
+    vec2 ts = vec2(textureSize(uTex, 0)), gx = dUx * ts, gy = dUy * ts;
+    float lod = 0.5 * log2(max(max(dot(gx, gx), dot(gy, gy)), 1.));
+    if (tx.a < 0.42 - 0.045 * clamp(lod, 0., 4.)) discard;
+  }
   if (uKind == 11) {
     // tree picture: vCol.xy = the tree's anchor in the same local frame as aPos; the anchor relative to the eye is then fragment-eye + (anchor - fragment-local)
     vec2 anc = vPosRel.xz + (vCol.xy - vLocal.xz);
-    if (dot(anc, anc) < uNear2 || tx.a < 0.42) discard;
+    // a picture seen nearly edge-on would show as a bright streak: its cut-off rises as it turns away (the second, crossed picture of the tree always faces us)
+    vec3 pn = normalize(vec3(vNrm.x, 0., vNrm.z) + vec3(1e-5)), vh = normalize(vec3(vPosRel.x, 0., vPosRel.z) + vec3(1e-5));
+    if (dot(anc, anc) < uNear2 || tx.a * smoothstep(0.1, 0.4, abs(dot(pn, vh))) < 0.42) discard;
   }
 
   if (uKind == 4) {
@@ -396,7 +427,7 @@ void main(){
     float lf = vn2(wl.xz * 7. + wl.y * 5.) * 0.6 + vn2(wl.xy * 15. + wl.z * 9.) * 0.4;
     float nl = 1. - smoothstep(10., 70., dist);
     vec3 tint = vCol;
-    if (uKind == 11) tint = vec3(1.32 * (0.88 + 0.24 * fract(sin(dot(vCol.xy, vec2(12.9898, 78.233))) * 43758.5453)));   // pictures: painted shading is already in the texture, only a per-tree brightness varies
+    if (uKind == 11) tint = vec3(1.0 * (0.88 + 0.24 * fract(sin(dot(vCol.xy, vec2(12.9898, 78.233))) * 43758.5453)));   // pictures: painted shading is already in the texture, only a per-tree brightness varies
     albedo = tx.rgb * uBase * tint * (1. + (lf - .5) * 0.3 * nl);
     ao = mix(0.55, 1., smoothstep(-0.7, 0.45, N.y));
     float dayL = smoothstep(0., 0.18, uSunDir.y);
@@ -405,6 +436,41 @@ void main(){
     emis += albedo * (vec3(0.78, 0.7, 0.16) * back * 0.45 + vec3(0.5, 0.62, 0.14) * thru * 0.2) * dayL;
     N = normalize(N + vec3(lf - .5, 0., (lf - .5) * 0.7) * 0.18 * nl);
     rough = 0.82; metal = 0.; coat = 0.;
+  } else if (uKind == 12) {
+    // fruit skin, drawn on the fly from the lathe coordinates: vUv.x = around, vUv.y = along the axis; vTile = type*4096 + seed + weight; vCol = the base skin colour (ripeness already in it)
+    float ft = floor(vTile / 4096. + 0.001), sd = floor(vTile - ft * 4096.) * 0.731;
+    float fw = max(length(dUx), length(dUy)) + 1e-5;
+    float fa = 1. - smoothstep(0.25, 0.7, 40. * fw), fb = 1. - smoothstep(0.25, 0.7, 12. * fw), fc = 1. - smoothstep(0.25, 0.7, 90. * fw);
+    vec3 sk = vCol;
+    N = normalize(vNrm); if (!front) N = -N;
+    rough = 0.5; metal = 0.; coat = 0.;
+    if (ft < 3.5) {
+      // apple: long vertical streaks of red over yellow-green, pale lenticel dots, waxy sheen
+      float st = vn2(vec2(vUv.x * 46., vUv.y * 2.6 + sd)) * 0.6 + vn2(vec2(vUv.x * 120., vUv.y * 5. + sd * 2.)) * 0.4;
+      sk *= 1. + (st - 0.5) * 0.55 * fa;
+      float ld = vn2(vec2(vUv.x * 90., vUv.y * 60. + sd));
+      sk = mix(sk, vec3(0.86, 0.78, 0.5) * dot(sk, vec3(0.5)) * 1.9, smoothstep(0.86, 0.95, ld) * 0.45 * fc);
+      sk *= 0.92 + 0.12 * smoothstep(0.0, 0.12, vUv.y) ;
+      rough = 0.28 + 0.08 * st;
+    } else if (ft < 4.5) {
+      // mango: smooth, a faint powdery bloom, tiny pale speckles, blush and green streaks from the base colour
+      float st = vn2(vec2(vUv.x * 30., vUv.y * 4. + sd));
+      sk *= 1. + (st - 0.5) * 0.22 * fa;
+      float ld = vn2(vec2(vUv.x * 110., vUv.y * 70. + sd));
+      sk = mix(sk, sk * 1.25 + vec3(0.04, 0.035, 0.0), smoothstep(0.84, 0.95, ld) * 0.5 * fc);
+      rough = 0.38;
+    } else if (ft < 5.5) {
+      // coconut: green husk with long fibres, dull
+      float fb2 = vn2(vec2(vUv.x * 70., vUv.y * 5. + sd)) * 0.55 + vn2(vec2(vUv.x * 190., vUv.y * 11.)) * 0.45;
+      sk *= 0.78 + 0.5 * mix(0.5, fb2, fa);
+      rough = 0.88;
+    } else {
+      float st = vn2(vec2(vUv.x * 40., vUv.y * 30. + sd));
+      sk *= 1. + (st - 0.5) * 0.3 * fa;
+      rough = ft < 6.5 ? 0.36 : 0.5;
+    }
+    albedo = uBase * sk;
+    ao = mix(0.7, 1., smoothstep(-0.8, 0.4, N.y));
   } else if (uKind == 6) {
     // textured standard
     albedo = tx.rgb * uBase * vCol;

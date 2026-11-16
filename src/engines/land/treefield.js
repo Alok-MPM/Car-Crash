@@ -4,61 +4,79 @@
 //  The picture of a near tree is not drawn: the billboard shader discards every quad whose tree anchor is inside the near radius (uNear2), so the swap is instant and needs no list rebuild.
 //  - PHYSICS: a tree has no body until a car / person / heavy debris can reach it (10 m). Then ONE hard static trunk body is added (octagon of two boxes, 3.2 m tall); it is removed again beyond ~13 m.
 //  - LEAVES: ambient leaves drift down from near trees; a car hitting a trunk shakes the crown loose (leaf shower + bark chips + thud).
+// TREE FIELD: every tree of the city, drawn in three ways and never built at run time.
+//  - FAR  (beyond ~38 m): a painted picture of the species (impostor atlas, painted from the very same grown skeleton) on two crossed quads. All pictures of a 192 m cell are ONE static mesh = one draw call, no physics.
+//  - NEAR (15 - 38 m): the grown tree as a light mesh (wood to the thick limbs + crossed leaf-cluster cards), compiled once at start (3 seeded variants per species), placed with just a matrix. At most CAP trees at a time.
+//  - CLOSE (inside ~15 m, the nearest few trees): the full mesh of the same tree: every limb and twig, every single leaf (own wind), blossoms, fruit. A governor takes the close trees away again if the frame rate sinks.
+//  The picture of a near tree is not drawn: the billboard shader discards every quad whose tree anchor is inside the near radius (uNear2), so the swap is instant and needs no list rebuild.
+//  - PHYSICS: a tree has no body until a car / person / heavy debris can reach it (10 m). Then ONE hard static trunk body is added (octagon of two boxes, 3.2 m tall); it is removed again beyond ~13 m.
+//  - LEAVES: ambient leaves drift down from near trees; a car hitting a trunk shakes the crown loose (leaf shower + bark chips + thud). Fruit (coconut, mango, apple) can be shaken loose too.
 import { Body, GROUP } from '../../core/physics.js';
 import { m4 } from '../../core/math.js';
 import { Builder } from '../cars/carmodel.js';
-import { addTree, ellipsoid, makeFoliageTex, makeImpostors } from './trees.js';
+import { makeFoliageTex, makeImpostors } from './trees.js';
+import { genTree, emitDetail, emitCards, TreeBuilder, fruitMesh, fruitPositions } from './treegen.js';
 
-export const NEAR = 38, CAP = 26, CAST = 14;
-const BG = 192, FAR = 560, BK = 48, TB = 24, PON = 10, POFF = 13.5;
+export const NEAR = 38, CAP = 26, CAST = 14, DET_R = 15, DET_OUT = 17.5, DET_MAX = 6;
+const BG = 192, FAR = 560, BK = 48, TB = 24, PON = 10, POFF = 13.5, NV = 3;
 const PETAL = { gulmohar: [0.78, 0.09, 0.03] };
-const LEAFERS = { neem: 1, mango: 1, banyan: 1, gulmohar: 1, babool: 0.5 };   // (a coconut palm sheds no little leaves: only nuts fall from it)
-// fruit that can be shaken loose. A ripe coconut with its husk weighs about 2 kg: from a palm crown it arrives at 12+ m/s (150+ J) and dents sheet metal.
+const LEAFERS = { neem: 1, mango: 1, banyan: 1, gulmohar: 1, babool: 0.5, apple: 0.8 };   // (a coconut palm sheds no little leaves: only nuts fall from it)
+// fruit that can be shaken loose. A ripe coconut with its husk weighs about 2 kg: from a palm crown it arrives at 12+ m/s (150+ J) and dents sheet metal. skins: ripeness values of the two looks a fallen piece can have.
 const FRUIT = {
-  coconut: { mass: 2.0, he: [0.1, 0.14, 0.1], box: [0.095, 0.13, 0.095], col: [[0.14, 0.22, 0.05], [0.26, 0.17, 0.075]], tri: 0.07 },
-  mango: { mass: 0.4, he: [0.055, 0.085, 0.055], box: [0.05, 0.075, 0.05], col: [[0.24, 0.36, 0.06], [0.55, 0.42, 0.07]], tri: 0 },
+  coconut: { mass: 2.0, box: [0.095, 0.13, 0.095], skins: [0.0, 1.0] },
+  mango: { mass: 0.4, box: [0.05, 0.075, 0.05], skins: [0.12, 0.85] },
+  apple: { mass: 0.22, box: [0.05, 0.047, 0.05], skins: [0.95, 0.4] },
 };
-const FRUIT_OF = { palm: 'coconut', mango: 'mango' };
+const FRUIT_OF = { palm: 'coconut', mango: 'mango', apple: 'apple' };
 const MAXNUT = 30;
+const hashName = (n) => { let h = 7; for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) % 100003; return h; };
 
 export class TreeField {
-  // W: { trunk, leaf } part ids; leafMat / trunkMat: the shared material objects of the land mesh
-  constructor({ r, plan, TREES, TREE_SETS, W, leafMat, trunkMat, nutMat }) {
+  // W: { trunk, leaf, nuts: [5 part ids], fruitS } part ids; leafMat / trunkMat / nutMat / fruitSMat: the shared material objects of the land mesh
+  constructor({ r, plan, TREES, TREE_SETS, W, leafMat, trunkMat, nutMat, fruitSMat }) {
     this.r = r; this.W = W; this.world = null; this.fx = null; this.sfx = null;
     const t0 = performance.now();
-    leafMat.tex = makeFoliageTex(r);
+    leafMat.tex = makeFoliageTex(r);   // also fills the leaf registry the grower reads, so it comes first
     const t1 = performance.now();
-    const imp = makeImpostors(r, TREES);
-    const t2 = performance.now();
-    this.impMat = { kind: 11, base: [0.52, 0.52, 0.52], rough: 0.9, doubleSided: true, cut: true, tex: imp.tex, near2: 0 };
-    // ---- prototypes: built once, here, for the species that are actually planted
+    // ---- prototypes: grown, compiled twice (light + full) and kept as meshes. Only the position of the fruit and the first variant (for the picture) stay in memory.
     const used = new Set();
     for (const k of Object.keys(TREE_SETS)) for (const n of TREE_SETS[k]) used.add(n);
-    this.protos = {};
+    this.protos = {}; const Tmap = {}; this.tris = { card: 0, det: 0 };
+    const mat = (g) => { g.mat = g.part === W.trunk ? trunkMat : g.part === W.fruitS ? fruitSMat : W.nuts.includes(g.part) ? nutMat : leafMat; };
     for (const name of used) {
-      const sp = TREES[name], hN = (sp.h[0] + sp.h[1]) / 2, cN = (sp.crown[0] + sp.crown[1]) / 2, list = [], fruit = [];
-      for (let v = 0; v < 3; v++) {
+      const sp = TREES[name], hN = (sp.h[0] + sp.h[1]) / 2, cN = (sp.crown[0] + sp.crown[1]) / 2, list = [], det = [], fruit = [];
+      for (let v = 0; v < NV; v++) {
         const la = v === 0 ? sp.leaf[0] : v === 1 ? sp.leaf[1] : [(sp.leaf[0][0] + sp.leaf[1][0]) / 2, (sp.leaf[0][1] + sp.leaf[1][1]) / 2, (sp.leaf[0][2] + sp.leaf[1][2]) / 2];
-        const b = new Builder([0, 0, 0]);
-        const fp = addTree(b, W, name, sp, { x: 0, z: 0, s: 0.137 + 0.29 * v, s2: 0.5 + 0.11 * v, s3: 0.31 + 0.23 * v }, hN, cN, [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09]);
-        const f = b.finish(); f.groups.forEach((g) => { g.mat = g.part === W.trunk ? trunkMat : W.nuts.includes(g.part) ? nutMat : leafMat; });
-        list.push(r.createMesh(f.geo, { groups: f.groups, radius: hN * 1.2 + cN }));
-        fruit.push(fp);
+        const lc = [la[0] / 0.14, la[1] / 0.28, la[2] / 0.09], seed = 1301 + v * 7919 + hashName(name) * 13;
+        const T = genTree(name, sp, hN, cN, seed);
+        const bc = new TreeBuilder([0, 0, 0]); emitCards(bc, W, T, lc, seed + 1);
+        const bd = new TreeBuilder([0, 0, 0]); emitDetail(bd, W, T, lc, seed + 2);
+        const fc = bc.finish(), fd = bd.finish(); fc.groups.forEach(mat); fd.groups.forEach(mat);
+        this.tris.card += bc.nv; this.tris.det += bd.nv;
+        const radius = hN * 1.2 + cN;
+        list.push(r.createMesh(fc.geo, { groups: fc.groups, radius })); det.push(r.createMesh(fd.geo, { groups: fd.groups, radius }));
+        fruit.push(fruitPositions(T));
+        if (v === 0) Tmap[name] = T;
       }
-      this.protos[name] = { hN, cN, list, fruit };
+      this.protos[name] = { hN, cN, list, det, fruit };
     }
-    // the shapes of loose fruit (one mesh per fruit kind and skin colour), drawn for every fallen piece
-    this.nutMesh = {};
-    for (const k of Object.keys(FRUIT)) this.nutMesh[k] = FRUIT[k].col.map((col) => { const b = new Builder([0, 0, 0]); ellipsoid(b, W.nuts[0], 0, 0, 0, FRUIT[k].he[0], FRUIT[k].he[1], [0, 1, 0], col, FRUIT[k].tri); const f = b.finish(); f.groups.forEach((g) => { g.mat = nutMat; }); return r.createMesh(f.geo, { groups: f.groups, radius: 0.4 }); });
-    this.nuts = []; this.pend = [];
+    const t2 = performance.now();
+    const imp = makeImpostors(r, TREES, Tmap);
     const t3 = performance.now();
+    this.impMat = { kind: 11, base: [0.52, 0.52, 0.52], rough: 0.9, doubleSided: true, cut: true, tex: imp.tex, near2: 0 };
+    // the shapes of loose fruit (one mesh per fruit kind and skin), drawn for every fallen piece; no wind on these
+    const looseMat = { ...nutMat, sway: 0 };
+    this.nutMesh = {};
+    for (const k of Object.keys(FRUIT)) this.nutMesh[k] = FRUIT[k].skins.map((ripe, i) => { const b = new TreeBuilder([0, 0, 0]); fruitMesh(b, W.nuts[0], k, ripe, 91 + i * 17); const f = b.finish(); f.groups.forEach((g) => { g.mat = looseMat; }); return r.createMesh(f.geo, { groups: f.groups, radius: 0.4 }); });
+    this.nuts = []; this.pend = [];
+    const t4 = performance.now();
     // ---- every tree of the plan
     this.trees = []; this.bk = new Map(); this.tb = new Map();
     const cells = new Map();
     for (const t of plan.trees) {
       const set = TREE_SETS[t.set], name = set[Math.floor(t.s * 97) % set.length], sp = TREES[name], P = this.protos[name];
       const h = sp.h[0] + t.s2 * (sp.h[1] - sp.h[0]), cr = sp.crown[0] + t.s3 * (sp.crown[1] - sp.crown[0]), s = Math.sqrt((h / P.hN) * (cr / P.cN));
-      const fk = FRUIT_OF[name] && P.fruit[0], tr = { x: t.x, z: t.z, set: t.set, name, sp, P, s, left: fk ? fk.map((_, g) => g) : null, hide: null, h, cr, v: Math.floor(t.s * 1000) % 3, yaw: (t.s2 * 6.2832 + t.s3 * 3.1) % 6.2832, trunkR: name === 'shrub' ? 0 : sp.trunk * s * 0.95, body: null, idle: 0, want: 0, m: null, d2: 0, hitT: -9 };
+      const fk = FRUIT_OF[name] && P.fruit[0] && P.fruit[0].length ? P.fruit[0] : null, tr = { x: t.x, z: t.z, set: t.set, name, sp, P, s, left: fk ? fk.map((_, g) => g) : null, hide: null, h, cr, v: Math.floor(t.s * 1000) % 3, yaw: (t.s2 * 6.2832 + t.s3 * 3.1) % 6.2832, trunkR: name === 'shrub' ? 0 : sp.trunk * s * 0.95, body: null, idle: 0, want: 0, m: null, d2: 0, hitT: -9 };
       this.trees.push(tr);
       const key = (t.x / BK | 0) + ':' + (t.z / BK | 0), key2 = (Math.floor(t.x / BG)) + ':' + (Math.floor(t.z / BG));
       const kb = Math.floor(t.x / BK) + ':' + Math.floor(t.z / BK);
@@ -74,8 +92,8 @@ export class TreeField {
     for (const c of cells.values()) {
       const b = new Builder([-c.cx, 0, -c.cz]);
       for (const tr of c.items) {
-        const I = imp.info[tr.name], [cu, cv] = I.cell, Wd = I.W * tr.s, Ht = I.H * tr.s, ax = tr.x - c.cx, az = tr.z - c.cz;
-        const u0 = cu * 0.25 + 0.004, u1 = cu * 0.25 + 0.246, v0 = cv * 0.5 + 0.006, v1 = cv * 0.5 + 0.494;
+        const I = imp.info[tr.name], Wd = I.W * tr.s, Ht = I.H * tr.s, ax = tr.x - c.cx, az = tr.z - c.cz;
+        const [u0, u1, v0, v1] = I.uv;
         for (let k = 0; k < 2; k++) {
           const a = tr.yaw + k * 1.5708, cs = Math.cos(a), sn = Math.sin(a), base = b.nv, ny = 0.9;
           for (const [sx, y, u, v] of [[-1, -0.016 * Ht, u0, v1], [1, -0.016 * Ht, u1, v1], [1, Ht, u1, v0], [-1, Ht, u0, v0]]) {
@@ -89,7 +107,8 @@ export class TreeField {
       c.model = m4.fromTRS(new Float32Array(16), [c.cx, 0, c.cz], [0, 0, 0, 1], 1);
       this.cells.push(c);
     }
-    this.buildMs = Math.round(performance.now() - t0); this.buildT = { atlas: Math.round(t1 - t0), imp: Math.round(t2 - t1), proto: Math.round(t3 - t2), rest: Math.round(performance.now() - t3) };
+    this.buildMs = Math.round(performance.now() - t0); this.buildT = { atlas: Math.round(t1 - t0), proto: Math.round(t2 - t1), imp: Math.round(t3 - t2), rest: Math.round(performance.now() - t4) };
+    this.detN = DET_MAX; this.govern = true; this.ema = 0.03; this.lastT = 0; this.govT = 0; this.nDet = 0;
     this.cand = []; this.near = []; this.active = []; this.stamp = 0; this.leafT = 0; this.t = 0; this.camX = 0; this.camZ = 0;
   }
   attach(world, fx, sfx) { this.world = world; this.fx = fx; this.sfx = sfx; }
@@ -110,16 +129,28 @@ export class TreeField {
     const n = Math.min(cand.length, CAP);
     this.near.length = 0;
     this.impMat.near2 = (R - 1.5) * (R - 1.5);                        // pictures are hidden inside this radius; the 3D tree overlaps it by 1.5 m, so there is never a gap
+    const now = performance.now(), fdt = (now - this.lastT) / 1000; this.lastT = now;
+    if (this.govern && fdt > 0 && fdt < 0.4) {
+      // frame-rate governor: the full-detail trees are the expensive part, so when frames get slow fewer of them are drawn (the light version looks the same from 15 m); they come back when there is room again
+      this.ema += (fdt - this.ema) * 0.04; this.govT -= fdt;
+      if (this.govT <= 0) {
+        if (this.ema > 0.046 && this.detN > 0) { this.detN--; this.govT = 1.2; } else if (this.ema < 0.034 && this.detN < DET_MAX) { this.detN++; this.govT = 3; } else this.govT = 0.5;
+      }
+    }
+    let nd = 0;
     for (let i = 0; i < n; i++) {
       const tr = cand[i];
       if (!tr.m) { tr.m = new Float32Array(16); const hy = tr.yaw / 2; m4.fromTRS(tr.m, [tr.x, 0, tr.z], [0, Math.sin(hy), 0, Math.cos(hy)], tr.s); }
-      r.add(tr.P.list[tr.v], tr.m, { cast: i < CAST, hide: tr.hide || undefined });
+      const lim = tr.det ? DET_OUT : DET_R;
+      tr.det = nd < this.detN && tr.d2 < lim * lim; if (tr.det) nd++;
+      r.add(tr.det ? tr.P.det[tr.v] : tr.P.list[tr.v], tr.m, { cast: i < CAST, hide: tr.hide || undefined });
       this.near.push(tr);
     }
+    this.nDet = nd;
     for (const n of this.nuts) {
       const b = n.body, dx = b.pos[0] - cx, dz = b.pos[2] - cz;
       if (dx * dx + dz * dz > 150 * 150) continue;
-      m4.fromTRS(n.m, b.pos, b.q, 1);
+      m4.fromTRS(n.m, b.pos, b.q, n.sc);
       r.add(this.nutMesh[n.kind][n.skin], n.m, { cast: dx * dx + dz * dz < 25 * 25 });
     }
     for (const c of this.cells) {
@@ -198,7 +229,7 @@ export class TreeField {
     b.v = q.v; b.w = [(Math.random() - 0.5) * 4, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 4];
     b.report = true; b.nut = q.kind; b.dent = true;
     this.world.add(b);
-    this.nuts.push({ body: b, kind: q.kind, skin: Math.random() < 0.55 ? 0 : 1, m: new Float32Array(16), age: 0 });
+    this.nuts.push({ body: b, kind: q.kind, skin: Math.random() < 0.55 ? 0 : 1, sc: q.sc, m: new Float32Array(16), age: 0 });
   }
   // the trunk was hit at `speed` (m/s). Up to ~15 km/h: nothing; 15 - 30 km/h: sometimes one nut; 30 - 50 km/h: one or two; 50 - 72 km/h: most of the bunches; faster: every nut comes down.
   _shake(tr, p, speed) {

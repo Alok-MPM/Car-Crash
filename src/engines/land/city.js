@@ -180,9 +180,10 @@ export function planCity({ seed = 1, cx = 1200, cz = -1200, half = 2, pitch = 10
 // Every flat layer on the ground has a draw LEVEL (polygon offset) so layers always stack in the right order at any distance - no flicker.
 const P = {}; let _n = 0; for (const k of ['dry', 'grass', 'soil', 'plough', 'wheat', 'paddy', 'mustard', 'rowDark', 'rowLight', 'paver', 'footpath', 'chowk', 'water', 'embank',
   'rBC', 'rBazaar', 'rGali', 'rVillage', 'rOff', 'rut', 'shoulder', 'kerb', 'kerbBlack', 'median', 'white', 'yellow', 'trunk', 'leafA', 'steel', 'pole', 'sign', 'signW',
-  'hBC', 'hDBM', 'hWMM', 'hGSB', 'hSub', 'mulch', 'nut0', 'nut1', 'nut2', 'nut3', 'nut4']) P[k] = _n++;
+  'hBC', 'hDBM', 'hWMM', 'hGSB', 'hSub', 'mulch', 'nut0', 'nut1', 'nut2', 'nut3', 'nut4', 'fruitS']) P[k] = _n++;
 const TINT = (c, m) => c.map((v) => v * m);
-const NUT = { kind: 0, base: [1, 1, 1], rough: 0.78, doubleSided: true };
+const NUT = { kind: 12, base: [1, 1, 1], rough: 0.5, doubleSided: true, sway: 3 };   // hanging fruit: skin drawn in the shader, swings on its stalk
+const FRUIT_S = { kind: 12, base: [1, 1, 1], rough: 0.5, doubleSided: true, sway: 2 };   // fruit that stays: fallen ones in the grass, figs on the trunk (moves with the branch it sits on)
 const MATS = () => ({
   [P.dry]: { kind: 7, base: GROUND.grassDry.color, texScale: 1 },
   [P.grass]: { kind: 7, flake: 1, base: GROUND.grass.color, texScale: 1, poly: 1, under: true },
@@ -210,9 +211,9 @@ const MATS = () => ({
   [P.median]: { kind: 7, base: [0.1, 0.2, 0.06], texScale: 1, poly: 6 },
   [P.white]: { kind: 0, base: GROUND.white.color, rough: 0.7, poly: 7 },
   [P.yellow]: { kind: 0, base: GROUND.yellow.color, rough: 0.7, poly: 7 },
-  [P.trunk]: { kind: 9, base: [0.18, 0.12, 0.07], rough: 0.95 },
+  [P.trunk]: { kind: 9, base: [0.18, 0.12, 0.07], rough: 0.95, sway: 2 },   // wood sways with the tree (lean + branch field), no leaf flutter
   [P.leafA]: { kind: 10, base: [0.52, 0.52, 0.52], rough: 0.9, doubleSided: true, cut: true, sway: 1 },   // alpha-cut leaf cards from the foliage atlas (tex is set in buildLand)
-  [P.nut0]: NUT, [P.nut1]: NUT, [P.nut2]: NUT, [P.nut3]: NUT, [P.nut4]: NUT,   // coconuts / mangoes: vertex-coloured husk and skin, hidden group by group when they fall
+  [P.nut0]: NUT, [P.nut1]: NUT, [P.nut2]: NUT, [P.nut3]: NUT, [P.nut4]: NUT, [P.fruitS]: FRUIT_S,   // coconuts / mangoes / apples: hidden group by group when they fall
   [P.mulch]: { kind: 7, flake: 2, base: [0.075, 0.048, 0.03], texScale: 1, poly: 2, noShadow: true },   // dark mulch / soil bed under trees and shrubs
   [P.steel]: { kind: 0, base: [0.62, 0.64, 0.66], metal: 0.8, rough: 0.35 },
   [P.pole]: { kind: 0, base: [0.45, 0.47, 0.5], metal: 0.6, rough: 0.5 },
@@ -322,7 +323,7 @@ export function buildLand(r, plan) {
   }
 
   // trees: every species is compiled once as a prototype 3D mesh and once as a painted picture (see treefield.js); nothing is built while playing
-  const treeField = new TreeField({ r, plan, TREES, TREE_SETS, W: { trunk: P.trunk, leaf: P.leafA, nuts: [P.nut0, P.nut1, P.nut2, P.nut3, P.nut4] }, leafMat: PM[P.leafA], trunkMat: PM[P.trunk], nutMat: PM[P.nut0] });
+  const treeField = new TreeField({ r, plan, TREES, TREE_SETS, W: { trunk: P.trunk, leaf: P.leafA, nuts: [P.nut0, P.nut1, P.nut2, P.nut3, P.nut4], fruitS: P.fruitS }, leafMat: PM[P.leafA], trunkMat: PM[P.trunk], nutMat: PM[P.nut0], fruitSMat: PM[P.fruitS] });
 
   // road damage: a hole digs through the layers in order (wearing course, binder, base, sub-base, subgrade). Rings of decreasing size, each in its layer's colour.
   const holes = [];
