@@ -608,7 +608,7 @@ function updateHud(dt) {
   hudT = 0.05;
   drawGauge();
   const hp = player.health;
-  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + world.bodies.length;
+  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + world.bodies.length + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
   $('hpfill').style.width = (hp * 100).toFixed(0) + '%';
   $('hpfill').style.background = hp > 0.6 ? '#dfe3e8' : hp > 0.3 ? '#f5c400' : '#e5484d';
   $('cost').innerHTML = '$' + Math.round(player.cost).toLocaleString() + (propDmg > 500 ? '<small style="display:block;font-size:12px;font-weight:600;color:var(--muted)">property $' + Math.round(propDmg).toLocaleString() + '</small>' : '');

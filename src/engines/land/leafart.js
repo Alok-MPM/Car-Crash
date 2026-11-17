@@ -7,7 +7,7 @@ import { mulberry32 } from '../../core/math.js';
 
 export const AW = 2048, AH = 1024, CL = 256;
 export const CELL = { broad: [0, 0], ashoka: [1, 0], palm: [2, 0], shrub: [3, 0], neem: [0, 1], gul: [1, 1], flower: [2, 1], babool: [3, 1], mango: [0, 2], apple: [1, 2], banyan: [2, 2] };
-export const SLOT = { mango: [0, 0], banyan: [1, 0], apple: [2, 0], ashoka: [3, 0], neem: [0, 1], gul: [1, 1], babool: [2, 1], palm: [3, 1], shrub: [0, 2], gulflower: [1, 2], shrubflower: [2, 2] };
+export const SLOT = { mango: [0, 0], banyan: [1, 0], apple: [2, 0], ashoka: [3, 0], neem: [0, 1], gul: [1, 1], babool: [2, 1], palm: [3, 1], shrub: [0, 2], gulflower: [1, 2], shrubflower: [2, 2], neemlet: [3, 2], gulpinna: [0, 3], baboolpinna: [1, 3] };
 export const LEAF = {};   // name -> { u0, u1, v0, v1, asp (width / height of the painted rectangle), spr (small canvas), sw, sh, ax, ay }
 const TAU = 6.2831853;
 const rgb = (r, g, b, k = 1) => `rgb(${Math.min(255, r * k) | 0},${Math.min(255, g * k) | 0},${Math.min(255, b * k) | 0})`;
@@ -116,6 +116,20 @@ function pinnae(g, rn, o) {   // bipinnate: rachis -> pairs of pinnae -> pairs o
 }
 function paintGul(g, rn) { pinnae(g, rn, { L: 440, arch: 22, np: 11, pl: 140, nl: 12, ll: 27, lw: 0.34, c: [98, 170, 58] }); return [256 - 180, 496 - 470, 256 + 180, 506]; }
 function paintBabool(g, rn) { pinnae(g, rn, { L: 410, arch: 18, np: 8, pl: 100, nl: 12, ll: 21, lw: 0.28, c: [122, 146, 58] }); return [256 - 135, 496 - 440, 256 + 135, 506]; }
+// single pieces of the compound leaves: the 3D tree builds neem / gulmohar / babool leaves from these, one quad each, so every leaflet (every feather) is its own little surface
+function paintNeemlet(g) { paintLeaf(g, { ...LEAFLET_NEEM, len: 450, hw: 84, asym: 1.18, bend: 0.05, mot: 30, N: 40, tooth: 10, veins: 9, pet: { l: 16, w: 7 } }, 120); return [256 - 130, 496 - 450, 256 + 130, 514]; }
+function singlePinna(g, rn, o) {
+  const L = o.L;
+  g.strokeStyle = rgb(108, 132, 56); g.lineCap = 'round';
+  for (let i = 0; i < 20; i++) { const t = i / 20, t2 = (i + 1) / 20; g.lineWidth = 6 - 3.4 * t; g.beginPath(); g.moveTo(0, -L * t); g.lineTo(0, -L * t2); g.stroke(); }
+  for (let j = 1; j <= o.nl; j++) {
+    const q = j / (o.nl + 0.6), cy = -L * q, ls = o.ll * (1 - 0.4 * q) * (0.92 + rn() * 0.16), sh = 0.84 + rn() * 0.32, col = rgb(o.c[0] * sh, o.c[1] * sh, o.c[2] * sh);
+    leaflet(g, 0, cy, 1.2 - 0.25 * q, ls, ls * o.lw, col); leaflet(g, 0, cy, -1.2 + 0.25 * q, ls, ls * o.lw, col);
+  }
+  leaflet(g, 0, -L, 0, o.ll * 0.9, o.ll * o.lw * 0.9, rgb(o.c[0], o.c[1], o.c[2]));
+}
+function paintGulPinna(g, rn) { singlePinna(g, rn, { L: 430, nl: 13, ll: 52, lw: 0.34, c: [98, 170, 58] }); return [256 - 90, 496 - 450, 256 + 90, 508]; }
+function paintBaboolPinna(g, rn) { singlePinna(g, rn, { L: 400, nl: 11, ll: 44, lw: 0.3, c: [122, 146, 58] }); return [256 - 76, 496 - 420, 256 + 76, 508]; }
 function paintPalmLeaflet(g) {
   const len = 480, o = { len, hw: 15, a: 0.36, b: 0.5, N: 40, veins: 0, col: [[70, 128, 36], [92, 152, 46], [112, 170, 56]], mot: 10, mid: 'rgba(190,214,120,0.9)' };
   paintLeaf(g, o, 7);
@@ -195,6 +209,9 @@ function paintLeaves(g) {
     gul: (c, rn) => paintGul(c, rn),
     babool: (c, rn) => paintBabool(c, rn),
     palm: (c) => { paintPalmLeaflet(c); return [256 - 22, 496 - 486, 256 + 22, 500]; },
+    neemlet: (c) => paintNeemlet(c),
+    gulpinna: (c, rn) => paintGulPinna(c, rn),
+    baboolpinna: (c, rn) => paintBaboolPinna(c, rn),
     gulflower: (c, rn) => { paintGulFlower(c, rn); return [256 - 250, 496 - 232, 256 + 250, 508]; },
     shrubflower: (c, rn) => { paintShrubFlower(c, rn); return [256 - 180, 496 - 350, 256 + 180, 508]; },
   };

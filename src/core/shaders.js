@@ -93,7 +93,7 @@ void main(){
       float ty = floor(aTile / 4096.), r0 = aTile - ty * 4096., sd = floor(r0), w = r0 - sd;
       if (uSway < 1.5) {
         float f1 = sin(t * (6. + fract(sd * 0.137) * 4.) + sd * 2.399 + gust * 1.5), f2 = sin(t * (8.3 + fract(sd * 0.291) * 3.) + sd * 1.13);
-        float la = (0.4 + 0.6 * push) * w * 0.09;
+        float la = (0.4 + 0.6 * push) * w * 0.12;
         p.xyz += n * f1 * la + vec3(f2 * 0.6, f1 * f2 * 0.3, f2 * 0.4) * la * 0.5;
       } else {
         // hanging fruit: swings from its stalk like a pendulum, heavier fruit more slowly

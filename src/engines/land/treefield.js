@@ -6,8 +6,8 @@
 //  - LEAVES: ambient leaves drift down from near trees; a car hitting a trunk shakes the crown loose (leaf shower + bark chips + thud).
 // TREE FIELD: every tree of the city, drawn in three ways and never built at run time.
 //  - FAR  (beyond ~38 m): a painted picture of the species (impostor atlas, painted from the very same grown skeleton) on two crossed quads. All pictures of a 192 m cell are ONE static mesh = one draw call, no physics.
-//  - NEAR (15 - 38 m): the grown tree as a light mesh (wood to the thick limbs + crossed leaf-cluster cards), compiled once at start (3 seeded variants per species), placed with just a matrix. At most CAP trees at a time.
-//  - CLOSE (inside ~15 m, the nearest few trees): the full mesh of the same tree: every limb and twig, every single leaf (own wind), blossoms, fruit. A governor takes the close trees away again if the frame rate sinks.
+//  - NEAR (18 - 38 m): the grown tree as a light mesh (wood to the thick limbs + crossed leaf-cluster cards), compiled once at start (3 seeded variants per species), placed with just a matrix. At most CAP trees at a time.
+//  - CLOSE (inside ~18 m, the nearest few trees): the full mesh of the same tree: every limb and twig, every single leaf / leaflet (own wind), blossoms, fruit. Quality Low draws none of these, Medium 4 trees, High 6.
 //  The picture of a near tree is not drawn: the billboard shader discards every quad whose tree anchor is inside the near radius (uNear2), so the swap is instant and needs no list rebuild.
 //  - PHYSICS: a tree has no body until a car / person / heavy debris can reach it (10 m). Then ONE hard static trunk body is added (octagon of two boxes, 3.2 m tall); it is removed again beyond ~13 m.
 //  - LEAVES: ambient leaves drift down from near trees; a car hitting a trunk shakes the crown loose (leaf shower + bark chips + thud). Fruit (coconut, mango, apple) can be shaken loose too.
@@ -17,7 +17,7 @@ import { Builder } from '../cars/carmodel.js';
 import { makeFoliageTex, makeImpostors } from './trees.js';
 import { genTree, emitDetail, emitCards, TreeBuilder, fruitMesh, fruitPositions } from './treegen.js';
 
-export const NEAR = 38, CAP = 26, CAST = 14, DET_R = 15, DET_OUT = 17.5, DET_MAX = 6;
+export const NEAR = 38, CAP = 26, CAST = 14, DET_R = 18, DET_OUT = 21, DET_MAX = 6, DET_N = [0, 4, 6];
 const BG = 192, FAR = 560, BK = 48, TB = 24, PON = 10, POFF = 13.5, NV = 3;
 const PETAL = { gulmohar: [0.78, 0.09, 0.03] };
 const LEAFERS = { neem: 1, mango: 1, banyan: 1, gulmohar: 1, babool: 0.5, apple: 0.8 };   // (a coconut palm sheds no little leaves: only nuts fall from it)
@@ -108,7 +108,7 @@ export class TreeField {
       this.cells.push(c);
     }
     this.buildMs = Math.round(performance.now() - t0); this.buildT = { atlas: Math.round(t1 - t0), proto: Math.round(t2 - t1), imp: Math.round(t3 - t2), rest: Math.round(performance.now() - t4) };
-    this.detN = DET_MAX; this.govern = true; this.ema = 0.03; this.lastT = 0; this.govT = 0; this.nDet = 0;
+    this.detN = DET_MAX; this.nDet = 0;
     this.cand = []; this.near = []; this.active = []; this.stamp = 0; this.leafT = 0; this.t = 0; this.camX = 0; this.camZ = 0;
   }
   attach(world, fx, sfx) { this.world = world; this.fx = fx; this.sfx = sfx; }
@@ -129,14 +129,8 @@ export class TreeField {
     const n = Math.min(cand.length, CAP);
     this.near.length = 0;
     this.impMat.near2 = (R - 1.5) * (R - 1.5);                        // pictures are hidden inside this radius; the 3D tree overlaps it by 1.5 m, so there is never a gap
-    const now = performance.now(), fdt = (now - this.lastT) / 1000; this.lastT = now;
-    if (this.govern && fdt > 0 && fdt < 0.4) {
-      // frame-rate governor: the full-detail trees are the expensive part, so when frames get slow fewer of them are drawn (the light version looks the same from 15 m); they come back when there is room again
-      this.ema += (fdt - this.ema) * 0.04; this.govT -= fdt;
-      if (this.govT <= 0) {
-        if (this.ema > 0.046 && this.detN > 0) { this.detN--; this.govT = 1.2; } else if (this.ema < 0.034 && this.detN < DET_MAX) { this.detN++; this.govT = 3; } else this.govT = 0.5;
-      }
-    }
+    const q = r.quality ?? 2, detN = DET_N[q] ?? DET_MAX;   // how many of the nearest trees are drawn leaf by leaf: Low none, Medium 4, High 6 (the game's own resolution scaling takes care of frame rate)
+    this.detN = detN;
     let nd = 0;
     for (let i = 0; i < n; i++) {
       const tr = cand[i];

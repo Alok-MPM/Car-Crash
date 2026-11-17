@@ -39,12 +39,12 @@ const GOLD = 2.39996323;
 const SPEC = {
   apple:  { leaf: 'apple', rows: 2, fold: 0.22, droop: 0.12, target: 4800, fill: 180, size: [0.17, 0.26], oN: 0.8, tN: 0.45, upB: 0.25, leafOrd: 2, a0: 0.42, fork: 0.34, nLead: [4, 5], pitch: [0.55, 1.0], leadLen: 0.95, leadR: 0.5, maxOrd: 4, forks: [0, 3, 3, 2, 0], ratio: [0.6, 0.78], spread: [0.4, 0.7], bend: [0.05, 0.12, 0.22, 0.28, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.12, sag: 0, sideP: 0.55, env: { cy: 0.7, ry: 0.36, rx: 1.12 }, crownK: 1.0, trunkBend: 0.05, fruit: 'apple' },
   mango:  { leaf: 'mango', rows: 2, fold: 0.16, droop: 0.22, target: 4300, fill: 240, size: [0.3, 0.42], oN: 0.8, tN: 0.5, upB: -0.28, leafOrd: 3, a0: 0.34, fork: 0.2, nLead: [5, 6], pitch: [0.95, 1.3], leadLen: 0.9, leadR: 0.45, maxOrd: 4, forks: [0, 3, 3, 3, 0], ratio: [0.6, 0.76], spread: [0.4, 0.75], bend: [0.05, 0.1, 0.2, 0.26, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.1, sag: 0.04, sideP: 0.6, env: { cy: 0.62, ry: 0.38, rx: 1.12 }, crownK: 1.0, trunkBend: 0.07, rosette: 5, fruit: 'mango', young: 0.14 },
-  neem:   { leaf: 'neem', rows: 3, fold: 0, droop: 0.16, target: 2900, fill: 160, size: [0.34, 0.5], oN: 0.75, tN: 0.6, upB: 0.1, leafOrd: 2, a0: 0.4, fork: 0.34, nLead: [4, 5], pitch: [0.62, 1.0], leadLen: 0.95, leadR: 0.45, maxOrd: 4, forks: [0, 3, 3, 2, 0], ratio: [0.6, 0.78], spread: [0.42, 0.72], bend: [0.05, 0.12, 0.24, 0.3, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.12, sag: 0, sideP: 0.6, env: { cy: 0.68, ry: 0.36, rx: 1.12 }, crownK: 1.0, trunkBend: 0.06, young: 0.1, fruit: 'nimboli' },
+  neem:   { leaf: 'neem', rows: 3, fold: 0, droop: 0.16, target: 2900, fill: 160, size: [0.34, 0.5], oN: 0.75, tN: 0.6, upB: 0.1, leafOrd: 2, a0: 0.4, fork: 0.34, nLead: [4, 5], pitch: [0.62, 1.0], leadLen: 0.95, leadR: 0.45, maxOrd: 4, forks: [0, 3, 3, 2, 0], ratio: [0.6, 0.78], spread: [0.42, 0.72], bend: [0.05, 0.12, 0.24, 0.3, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.12, sag: 0, sideP: 0.6, env: { cy: 0.68, ry: 0.36, rx: 1.12 }, crownK: 1.0, trunkBend: 0.06, young: 0.1, fruit: 'nimboli', comp: { name: 'neemlet', n: 11, alt: true, lenK: 0.27, tK: [0.95, 0.5], ang: 0.95, rach: 0.85, keep: 0.34, scale: 1.2, ls: 1.4, droop: 0.22 } },
   banyan: { leaf: 'banyan', rows: 2, fold: 0.2, droop: 0.1, target: 5200, fill: 300, size: [0.22, 0.32], oN: 0.8, tN: 0.4, upB: 0.15, leafOrd: 2, a0: 0.36, fork: 0.24, nLead: [6, 7], pitch: [1.25, 1.5], leadLen: 1.0, leadR: 0.45, maxOrd: 4, forks: [0, 3, 3, 2, 0], ratio: [0.55, 0.72], spread: [0.4, 0.7], bend: [0.05, 0.1, 0.2, 0.26, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.05, sag: 0.03, sideP: 0.6, env: { cy: 0.66, ry: 0.3, rx: 1.12 }, crownK: 1.0, trunkBend: 0.04, upper: 3, roots: [8, 11], fruit: 'fig' },
-  gulmohar: { leaf: 'gul', rows: 3, fold: 0, droop: 0.12, target: 2100, fill: 70, size: [0.5, 0.7], oN: 1.0, tN: 0.3, upB: 0.12, leafOrd: 2, a0: 0.5, fork: 0.34, nLead: [4, 5], pitch: [1.15, 1.4], leadLen: 1.0, leadR: 0.45, maxOrd: 4, forks: [0, 3, 3, 2, 0], ratio: [0.58, 0.74], spread: [0.45, 0.78], bend: [0.05, 0.12, 0.22, 0.28, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.0, sag: 0.02, sideP: 0.55, env: { cy: 0.72, ry: 0.22, rx: 1.12 }, crownK: 1.0, trunkBend: 0.05, flower: 900 },
-  babool: { leaf: 'babool', rows: 3, fold: 0, droop: 0.12, target: 1900, fill: 45, size: [0.2, 0.3], oN: 1.0, tN: 0.3, upB: 0.05, leafOrd: 2, a0: 0.55, fork: 0.28, nLead: [3, 3], pitch: [0.5, 0.85], leadLen: 1.0, leadR: 0.5, maxOrd: 4, forks: [0, 2, 3, 2, 0], ratio: [0.62, 0.78], spread: [0.5, 0.9], bend: [0.1, 0.22, 0.34, 0.38, 0.4], nsub: [4, 4, 3, 3, 3], photo: 0.0, sag: 0.04, sideP: 0.5, env: { cy: 0.78, ry: 0.2, rx: 1.15 }, crownK: 1.0, trunkBend: 0.14, thorns: true },
+  gulmohar: { leaf: 'gul', rows: 3, fold: 0, droop: 0.12, target: 2100, fill: 70, size: [0.5, 0.7], oN: 1.0, tN: 0.3, upB: 0.12, leafOrd: 2, a0: 0.5, fork: 0.34, nLead: [4, 5], pitch: [1.15, 1.4], leadLen: 1.0, leadR: 0.45, maxOrd: 4, forks: [0, 3, 3, 2, 0], ratio: [0.58, 0.74], spread: [0.45, 0.78], bend: [0.05, 0.12, 0.22, 0.28, 0.3], nsub: [4, 4, 4, 3, 3], photo: 0.0, sag: 0.02, sideP: 0.55, env: { cy: 0.72, ry: 0.22, rx: 1.12 }, crownK: 1.0, trunkBend: 0.05, flower: 900, comp: { name: 'gulpinna', n: 8, alt: false, sine: true, lenK: 0.3, ang: 1.2, rach: 1.0, keep: 0.29, scale: 1.15, ls: 1.45, droop: 0.18 } },
+  babool: { leaf: 'babool', rows: 3, fold: 0, droop: 0.12, target: 1900, fill: 45, size: [0.2, 0.3], oN: 1.0, tN: 0.3, upB: 0.05, leafOrd: 2, a0: 0.55, fork: 0.28, nLead: [3, 3], pitch: [0.5, 0.85], leadLen: 1.0, leadR: 0.5, maxOrd: 4, forks: [0, 2, 3, 2, 0], ratio: [0.62, 0.78], spread: [0.5, 0.9], bend: [0.1, 0.22, 0.34, 0.38, 0.4], nsub: [4, 4, 3, 3, 3], photo: 0.0, sag: 0.04, sideP: 0.5, env: { cy: 0.78, ry: 0.2, rx: 1.15 }, crownK: 1.0, trunkBend: 0.14, thorns: true, comp: { name: 'baboolpinna', n: 6, alt: false, sine: true, lenK: 0.4, ang: 1.15, rach: 1.0, keep: 0.38, scale: 1.15, ls: 1.4, droop: 0.15 } },
   shrub:  { leaf: 'shrub', rows: 2, fold: 0.18, droop: 0.1, target: 900, fill: 70, size: [0.07, 0.11], oN: 0.8, tN: 0.4, upB: 0.3, leafOrd: 1, a0: 0.55, fork: 0.02, nLead: [8, 10], pitch: [0.12, 0.55], leadLen: 0.9, leadR: 0.7, maxOrd: 3, forks: [0, 3, 2, 0], ratio: [0.55, 0.72], spread: [0.4, 0.8], bend: [0.05, 0.15, 0.25, 0.3], nsub: [3, 3, 3, 3], photo: 0.1, sag: 0, sideP: 0.5, env: { cy: 0.55, ry: 0.5, rx: 1.15 }, crownK: 1.0, trunkBend: 0.02, flowerShrub: true },
-  ashoka: { cs: 1.15, leaf: 'ashoka', rows: 2, fold: 0.1, droop: 0.28, target: 3400, size: [0.22, 0.32], oN: 0.5, tN: 0.2, upB: -1.1, leafOrd: 1, a0: 0.66, a0b: 1 },
+  ashoka: { cs: 1.15, leaf: 'ashoka', rows: 2, fold: 0.1, droop: 0.28, target: 4800, size: [0.22, 0.32], oN: 0.5, tN: 0.2, upB: -1.1, leafOrd: 1, a0: 0.66, a0b: 1 },
 };
 
 // ---------------------------------------------------------------- skeleton
@@ -338,6 +338,25 @@ function emitLeaf(c, L, name, S, type) {
 }
 
 
+// a compound leaf (neem, gulmohar, babool) built the way the tree grows it: a rachis that arches and sags, and on it every leaflet / every feather as its OWN quad with its own wind flutter
+function emitCompound(c, L, S) {
+  const C = S.comp, rn = c.rn;
+  if (rn() > C.keep) return;
+  const d = L.d, len = L.len * C.scale, up = [0, 1, 0];
+  let wv = cross(d, up); if (Math.hypot(wv[0], wv[1], wv[2]) < 1e-3) wv = [1, 0, 0]; wv = norm(wv);
+  const P = (t) => add(mad(L.p, d, len * C.rach * t), [0, -C.droop * len * t * t, 0]);
+  const TG = (t) => norm(add(mul(d, len * C.rach), [0, -2 * C.droop * len * t, 0]));
+  const CS = { rows: 2, fold: 0, droop: 0.22 };
+  for (let i = 0; i < C.n; i++) {
+    const t = 0.12 + 0.82 * i / (C.n - 1), tg = TG(t), p = P(t), size = C.sine ? Math.sin(Math.PI * (0.2 + 0.7 * t)) * 0.9 + 0.25 : lerp(C.tK[0], C.tK[1], t);
+    for (const s of (C.alt ? [i % 2 ? 1 : -1] : [-1, 1])) {
+      const a = C.ang * (1 - 0.25 * t) + (rn() - 0.5) * 0.3, dir = norm(add(add(mul(tg, Math.cos(a)), mul(wv, s * Math.sin(a))), [0, -0.18, 0])), j = 0.92 + 0.16 * rn();
+      emitLeaf(c, { p, d: dir, roll: (rn() - 0.5) * 0.9, len: len * C.lenK * C.ls * size * (0.9 + 0.2 * rn()), ws: 1, c: [L.c[0] * j, L.c[1] * j, L.c[2] * j], out: L.out, seed: (L.seed * 7 + i * 131 + (s > 0 ? 57 : 0)) & 4095, nolc: L.nolc, rows: 2, cols: 2 }, C.name, CS, 0);
+    }
+  }
+  emitLeaf(c, { p: P(1), d: TG(1), roll: (rn() - 0.5) * 0.5, len: len * C.lenK * C.ls * 0.7, ws: 1, c: [L.c[0], L.c[1], L.c[2]], out: L.out, seed: (L.seed * 7 + 999) & 4095, nolc: L.nolc, rows: 2, cols: 2 }, C.name, CS, 0);
+}
+
 // ---------------------------------------------------------------- palm skeleton: ringed trunk, crownshaft, arched fronds with real leaflets
 function along(pts, t) {   // point and tangent at arc fraction t of a polyline
   let L = 0; const ls = [];
@@ -469,8 +488,8 @@ function thorn(b, W, p, d, len, r, k) {
 export function emitDetail(b, W, T, lc, rnSeed) {
   const rn = mulberry32(rnSeed), c = { b, W, rn, bk: 0.82 + rn() * 0.34, lc }, S = T.S;
   emitWood(c, T, 4);
-  for (const L of T.leaves) emitLeaf(c, L, S.leaf, S, 0);
-  if (T.name !== 'palm') clusterCards(c, T, 1.1, 0.62, 0.8);   // a few dark leaf clumps deep inside the crown: the single leaves sit in front of them, so the tree is never hollow
+  for (const L of T.leaves) { if (S.comp) emitCompound(c, L, S); else emitLeaf(c, L, S.leaf, S, 0); }
+  if (T.name !== 'palm') clusterCards(c, T, 0.6, 0.42, T.name === 'ashoka' ? 0.35 : 0.45);   // a few small dark leaf clumps deep inside the crown only (shade, not a visible sheet): the single leaves sit in front of them
   const fs = { rows: 2, fold: 0, droop: 0 };
   for (const f of T.flowers) emitLeaf(c, f, f.name, fs, 2);
   if (T.fruit) T.fruit.forEach((g, i) => { for (const f of g) emitFruit(c, W.nuts[i], f); });
@@ -514,7 +533,7 @@ function clusterCards(c, T, wk, kk, pickE) {
       cardQuad(c, T, cl.p, r1, [0, 1, 0], W0, W0, cell, hz, kv); cardQuad(c, T, cl.p, r2, [0, 1, 0], W0, W0, cell, hz, kv);
     } else {
       cardQuad(c, T, cl.p, right, [0, 1, 0], W0, W0, cellA, out, kv);                                  // faces outward
-      const az = rn() * 6.283; cardQuad(c, T, cl.p, [Math.cos(az), 0, Math.sin(az)], [-Math.sin(az), 0, Math.cos(az)], W0 * 0.95, W0 * 0.95, cell, [0, 1, 0], kv * 0.97);   // lies flat: seen from above
+      const az = rn() * 6.283, tl = 0.5 + rn() * 0.2; cardQuad(c, T, cl.p, [Math.cos(az), 0, Math.sin(az)], norm([-Math.sin(az) * tl, 1, Math.cos(az) * tl]), W0 * 0.9, W0 * 0.9, cell, norm([out[0], 0.6, out[2]]), kv * 0.88);   // a second card, tipped about 55 degrees, so the crown has depth from every side and no flat pale sheets
     }
   }
 }
