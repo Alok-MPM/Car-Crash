@@ -443,6 +443,8 @@ export class Car {
   draw() {
     const { r } = this.ctx;
     const b = this.body;
+    // a parked / roaming car far beyond the draw distance (and the shadow radius) costs nothing: no matrices, no wheel maths, no garbage
+    { const e = r.eye, dx = b.pos[0] - e[0], dz = b.pos[2] - e[2]; if (dx * dx + dz * dz > 520 * 520) return; }
     const M = this._m || (this._m = new Float32Array(16));
     m4.fromTRS(M, b.pos, b.q, 1);
     r.add(this.mesh, M, { hide: this.hide });

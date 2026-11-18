@@ -393,7 +393,8 @@ export class Scene {
     if (this.land) {
       for (const m of this.land.meshes) r.add(m, this.markModel, { cast: false });
       for (const m of this.land.holes) r.add(m, this.markModel, { cast: false });
-      for (const t of this.land.furMeshes) { if (Math.abs(t.cx - cam[0]) < 800 && Math.abs(t.cz - cam[2]) < 800) r.add(t.m, this.markModel, { cast: false }); }
+      // lamp posts / signs / barriers: 560 m is plenty, beyond that they are a pixel wide
+      for (const t of this.land.furMeshes) { if (Math.abs(t.cx - cam[0]) < 560 && Math.abs(t.cz - cam[2]) < 560) r.add(t.m, this.markModel, { cast: false }); }
       this.land.soil.draw(cam);
       this.land.treeField.draw(cam);   // pictures per 192 m cell (1 draw each) + the nearest few real 3D trees
     }

@@ -3,6 +3,7 @@ import { Renderer } from './core/gfx.js';
 import { World, GROUP } from './core/physics.js';
 import { CARS, getCar } from './engines/cars/cars.js';
 import { Car, drawDebris } from './engines/cars/car.js';
+import { PerfLab } from './core/perflab.js';
 import { Person } from './engines/people/person.js';
 import { initLab } from './ui/lab.js';
 import { Scene } from './engines/land/world.js';
@@ -66,6 +67,7 @@ function applyQuality() {
   r.setShadowSize(q === 2 ? 2048 : q === 1 ? 1024 : 0);
   r.shadowRadius = q === 2 ? 55 : 42;
   r.dprScale = [0.6, 0.85, 1][q];
+  ctx.lod2 = 0; r._shTex = null; if (scene && scene.land && scene.land.treeField) scene.land.treeField.detScale = 1;
   fx.quality = [0.35, 0.7, 1][q] * (ctx.load || 1);
   resize();
 }
@@ -608,7 +610,7 @@ function updateHud(dt) {
   hudT = 0.05;
   drawGauge();
   const hp = player.health;
-  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + world.bodies.length + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
+  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + awakeCount() + ' awake / ' + world.dyn.length + ' loose / ' + world.bodies.length + ' all' + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
   $('hpfill').style.width = (hp * 100).toFixed(0) + '%';
   $('hpfill').style.background = hp > 0.6 ? '#dfe3e8' : hp > 0.3 ? '#f5c400' : '#e5484d';
   $('cost').innerHTML = '$' + Math.round(player.cost).toLocaleString() + (propDmg > 500 ? '<small style="display:block;font-size:12px;font-weight:600;color:var(--muted)">property $' + Math.round(propDmg).toLocaleString() + '</small>' : '');
@@ -689,6 +691,7 @@ $('nInv').onclick = () => openSheet('inv'); $('nSet').onclick = () => openSheet(
 $('invX').onclick = () => openSheet(null); $('setX').onclick = () => openSheet(null);
 $('nPaint').onclick = () => { const sw = $('swatches'); sw.style.outline = '2px solid var(--accent)'; setTimeout(() => (sw.style.outline = ''), 700); S.color = (S.color + 1) % getCar(S.car).colors.length; save(); makePlayer(false); syncMenu(); };
 $('nLab').onclick = () => { if (window.openLab) window.openLab(); };
+$('perfLab').onclick = () => { openSheet(null); perfLab.start(); };
 addEventListener('keydown', (e) => { if (!menuOpen) return; if (e.code === 'ArrowLeft') stepCar(-1); else if (e.code === 'ArrowRight') stepCar(1); else if (e.code === 'Enter') $('go').click(); });
 function toggleMenu() { menuOpen = !menuOpen; $('menu').classList.toggle('hidden', !menuOpen); if (menuOpen) { orbitYaw = camYaw + Math.PI + 0.5; openSheet(null); } }
 $('go').onclick = () => { sfx.start(); sfx.mute(!S.sound); menuOpen = false; $('menu').classList.add('hidden'); };
@@ -706,6 +709,15 @@ tap('bWalk', toggleWalk); tap('bCar', backToCar); tap('bMenu', toggleMenu); tap(
 
 // ---------- frame loop ----------
 const H = 1 / 120;
+// graceful degradation beyond resolution: 1 = half the leaf-by-leaf trees + a smaller shadow area, 2 = pictures only for trees, 3 = no shadows and a lower resolution floor
+function setLod2(n) {
+  ctx.lod2 = n;
+  const tf = scene && scene.land && scene.land.treeField; if (tf) tf.detScale = n >= 2 ? 0 : n === 1 ? 0.5 : 1;
+  r.shadowRadius = (S.quality === 2 ? 55 : 42) * (n >= 1 ? 0.7 : 1);
+  if (n >= 3) { if (r.shadowTex) { r._shTex = r.shadowTex; r.shadowTex = null; } if (r.dprScale > 0.55) { r.dprScale = 0.55; resize(); } }
+  else if (!r.shadowTex && r._shTex) { r.shadowTex = r._shTex; r._shTex = null; }
+}
+const perfLab = new PerfLab({ r, S, ctx, fx, world, getScene: () => scene, resize, setLod2, hideMenu: (h) => { $('menu').style.visibility = h ? 'hidden' : ''; } });
 let warmUntil = 0;   // no start-up lock: the load governor already ignores one-off hitches (dt > 0.09), so detail scales from the first frame
 let acc = 0, last = 0, hudAcc = 0, fpsAvg = 16, lowT = 0, highT = 0;
 let engineT = 0;
@@ -741,7 +753,7 @@ function scanMovers() {
     if (sp2 < 4 || b.pos[1] < -5) continue;
     if (b.mass < 25 && b.mass * Math.sqrt(sp2) < 120) continue;                        // a flying brick or plaster flake must not wake a whole house: only heavy pieces (panels, slabs, big lumps) do
     const k = Math.max(3, Math.sqrt(sp2) * 0.35) / Math.sqrt(sp2);
-    debrisPts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + b.v[0] * k, z2: b.pos[2] + b.v[2] * k, r: 1.5 });
+    debrisPts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + b.v[0] * k, z2: b.pos[2] + b.v[2] * k, r: 1.5, own: (b.rub && b.rub.B) || (b.panel && b.panel.B) || null });   // own: the wreck it came from (it must not keep its own wreck awake for ever)
     if (debrisPts.length >= 160) break;
   }
 }
@@ -783,9 +795,11 @@ function stepPhysics(real) {
   }
   if (acc > H * 4) acc = 0;
 }
-let gLow = 0, gHigh = 0;
+const awakeCount = () => { let n = 0; for (const b of world.dyn) if (!b.sleeping) n++; return n; };
+let gLow = 0, gHigh = 0, lodHold = 0;
 function frame(t) {
   requestAnimationFrame(frame);
+  const _f0 = performance.now();
   const now = t / 1000;
   const tgt = S.fps || 0;                       // user's target FPS (0 = unlimited)
   if (tgt && now - last < 1 / tgt - 0.003) return;   // frame cap: saves heat + battery
@@ -796,7 +810,8 @@ function frame(t) {
   const goal = tgt || 60, fpsNow = 1000 / Math.max(fpsAvg, 1);
   // the first seconds after loading / pressing Play are full of one-off work (shader compile, mesh upload, audio start): never shed detail for that
   const warm = now < warmUntil;
-  if (warm) { lowT = 0; highT = 0; fpsAvg = Math.min(fpsAvg, 1000 / goal * 1.05); if ((ctx.load ?? 1) < 1 || r.dprScale < [0.6, 0.85, 1][S.quality]) { ctx.load = 1; fx.quality = [0.35, 0.7, 1][S.quality]; r.dprScale = [0.6, 0.85, 1][S.quality]; } }
+  if (perfLab.active) { lowT = 0; highT = 0; }
+  else if (warm) { lowT = 0; highT = 0; fpsAvg = Math.min(fpsAvg, 1000 / goal * 1.05); if ((ctx.load ?? 1) < 1 || r.dprScale < [0.6, 0.85, 1][S.quality]) { ctx.load = 1; fx.quality = [0.35, 0.7, 1][S.quality]; r.dprScale = [0.6, 0.85, 1][S.quality]; } }
   else if (dt > 0.09) { /* hitch (one-off), ignore */ }
   else if (fpsNow < goal * 0.7) { lowT += dt * 1.5; highT = 0; } else if (fpsNow < goal * 0.85) { lowT += dt; highT = 0; } else if (fpsNow > goal * 0.95) { highT += dt; lowT = 0; } else { lowT = highT = 0; }
   const load = ctx.load === undefined ? 1 : ctx.load;
@@ -804,15 +819,17 @@ function frame(t) {
     lowT = 0;
     if (load > 0.5) { ctx.load = Math.max(0.5, load - 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
     else if (r.dprScale > 0.7) { r.dprScale = Math.max(0.7, r.dprScale - 0.1); resize(); }
+    else if ((ctx.lod2 || 0) < 3) { setLod2((ctx.lod2 || 0) + 1); lodHold = now + 20; }          // still too slow: fewer leaf-trees, smaller shadow, then pictures-only trees, then no shadow
   }
   if (highT > 1.5) {
     highT = 0;
     const dm = [0.6, 0.85, 1][S.quality];
-    if (r.dprScale < dm) { r.dprScale = Math.min(dm, r.dprScale + 0.05); resize(); }
+    if ((ctx.lod2 || 0) > 0) { if (now > lodHold) setLod2(ctx.lod2 - 1); }                // the extreme steps come back first, but never within 20 s of going down (no flapping)
+    else if (r.dprScale < dm) { r.dprScale = Math.min(dm, r.dprScale + 0.05); resize(); }
     else if (load < 1) { ctx.load = Math.min(1, load + 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
   }
   // grass density: its own small governor (never thins grass for one slow frame; steps down when the average stays under ~24 fps, creeps back up when there is room)
-  if (!warm && dt <= 0.09 && scene.land && scene.land.soil) {
+  if (!warm && !perfLab.active && dt <= 0.09 && scene.land && scene.land.soil) {
     const gg = Math.min(goal, 30), so = scene.land.soil, gmax = [0.55, 0.8, 1][S.quality];
     if (fpsNow < gg * 0.8) { gLow += dt; gHigh = 0; } else if (fpsNow > gg * 0.95) { gHigh += dt; gLow = 0; } else { gLow = gHigh = 0; }
     if (gLow > 1.5) { gLow = 0; so.grassK = Math.max(0.15, so.grassK - 0.15); }
@@ -919,6 +936,7 @@ function frame(t) {
   const _d2 = performance.now();
   PF.dr = PF.dr * 0.9 + (_d1 - _d0) * 0.1; PF.rn = PF.rn * 0.9 + (_d2 - _d1) * 0.1;
   updateHud(dt);
+  if (perfLab.active) perfLab.tick(t, performance.now() - _f0);
 }
 
 // ---------- boot ----------
@@ -938,6 +956,6 @@ async function boot() {
   syncMenu();
   $('loading').style.display = 'none';
   requestAnimationFrame((t) => { last = t / 1000; frame(t); });
-  window.__game = { watch: watchBuildings, life, get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
+  window.__game = { setLod2, perfLab, watch: watchBuildings, life, get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
 }
 setTimeout(() => { boot().catch((e) => { console.error(e); $('loading').innerHTML = '<div style="padding:24px;text-align:center">Failed to start: ' + String(e.message || e).slice(0, 300) + '</div>'; }); }, 30);

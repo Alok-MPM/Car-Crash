@@ -198,12 +198,20 @@ export class Structures {
     for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) chk(d.body);
     return ok;
   }
-  sleepBuilding(B) {
+  // force: the player has been clear of this wreck for several seconds and a piece still has not come to rest (a plate jittering in a pile, a lump rolling on a slope).
+  // Nobody can see it, so it is put to sleep where it lies instead of keeping hundreds of bodies awake for ever.
+  restAll(B) {
+    const rest = (b) => { if (!b || b.fixed || b.removed) return; b.v[0] = b.v[1] = b.v[2] = 0; b.w[0] = b.w[1] = b.w[2] = 0; b.sleep(); };
+    for (const P of B.free) rest(P.body);
+    for (const it of B.lay.furn) rest(it.body);
+    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) rest(d.body);
+  }
+  sleepBuilding(B, force) {
     if (B.dormant || B.removed) return false;
     for (const L of B.lifts || []) if (L.state !== 'idle' || L.carry) return false;           // a lift in motion: stay awake
     let list;
     if (B.freed > 0 || B.free.size) {
-      if (!this.settled(B)) return false;
+      if (!this.settled(B)) { if (!force) return false; this.restAll(B); this.forced = (this.forced || 0) + 1; }
       B.spread = this.spreadOf(B);
       list = this.stashOf(B); B.stash = list;                                                 // frozen like a photo: the broken state stays, only physics leaves
     } else {
@@ -237,10 +245,10 @@ export class Structures {
       if (dmg && !B.dormant && (B.spT = (B.spT || 0) + 1) % 15 === 0) B.spread = this.spreadOf(B);
       const sp = dmg ? Math.min(B.spread || 8, 14) : 0;
       let near = false, far = true;
-      for (const p of pts) { if (Structures.reach(B, p, sp)) { near = true; far = false; break; } if (far && Structures.reach(B, p, sp + 6)) far = false; }
+      for (const p of pts) { if (p.own === B) continue; if (Structures.reach(B, p, sp)) { near = true; far = false; break; } if (far && Structures.reach(B, p, sp + 6)) far = false; }
       if (B.dormant) { if (near) this.wakeBuilding(B); }
-      else if (far) { B.far = (B.far || 0) + 1; if (B.far > 24 && this.sleepBuilding(B)) B.far = 0; }
-      else B.far = 0;
+      else if (far) { B.far = (B.far || 0) + 1; if (B.far > 24 && this.sleepBuilding(B, B.far > 300)) B.far = 0; }   // 300 frames (~5 s) clear of the wreck: freeze it even if a piece never settles
+      else B.far = Math.max(0, (B.far || 0) - 4);            // a watcher flickering past does not wipe the count, only a lasting one does
     }
   }
 
@@ -533,7 +541,7 @@ export class Structures {
       this.ctx.debris.push(d);
       this.rubble.push(d);
     }
-    while (this.rubble.length > 900 * (this.ctx.load || 1)) { const old = this.rubble.shift(); old.t = 999; }
+    while (this.rubble.length > [320, 560, 900][this.r.quality ?? 1] * (this.ctx.load || 1)) { const old = this.rubble.shift(); old.t = 999; }
   }
 
   releasePanel(P, v, why, frac = 1) {

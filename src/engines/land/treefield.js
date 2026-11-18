@@ -129,7 +129,7 @@ export class TreeField {
     const n = Math.min(cand.length, CAP);
     this.near.length = 0;
     this.impMat.near2 = (R - 1.5) * (R - 1.5);                        // pictures are hidden inside this radius; the 3D tree overlaps it by 1.5 m, so there is never a gap
-    const q = r.quality ?? 2, detN = DET_N[q] ?? DET_MAX;   // how many of the nearest trees are drawn leaf by leaf: Low none, Medium 4, High 6 (the game's own resolution scaling takes care of frame rate)
+    const q = r.quality ?? 2, detN = Math.round((DET_N[q] ?? DET_MAX) * (this.detScale ?? 1));   // how many of the nearest trees are drawn leaf by leaf: Low none, Medium 4, High 6 (the game's own resolution scaling takes care of frame rate)
     this.detN = detN;
     let nd = 0;
     for (let i = 0; i < n; i++) {
