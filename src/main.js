@@ -18,14 +18,14 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 if (isTouch) document.documentElement.classList.add('touch');
 
 // ---------- persisted settings ----------
-const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1 };
+const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1, aa: isTouch ? 0 : 1 };
 let S = { ...defaults };
 try { Object.assign(S, JSON.parse(localStorage.getItem('crashyard') || '{}')); } catch (e) {}
 const save = () => { try { localStorage.setItem('crashyard', JSON.stringify(S)); } catch (e) {} };
 
 // ---------- core objects ----------
-let r;
-try { r = new Renderer($('gl'), { quality: S.quality }); } catch (e) { $('loading').style.display = 'none'; $('err').style.display = 'flex'; console.error(e); throw e; }
+let r;   // MSAA is a large fixed cost on tablets (4x colour + depth bandwidth, resolve every frame): off by default there (S.aa)
+try { r = new Renderer($('gl'), { quality: S.quality, antialias: !!S.aa }); } catch (e) { $('loading').style.display = 'none'; $('err').style.display = 'flex'; console.error(e); throw e; }
 const world = new World();
 const fx = new FX();
 const sfx = new Sfx();
@@ -61,12 +61,15 @@ let player = null;
 let shake = 0, redFlash = 0, slowT = 0, timeScale = 1, userSlow = false, paused = false;
 
 // ---------- quality ----------
+// resolution scale limits per quality: [floor, ceiling]. The governor moves inside them; the last good value is remembered (S.dyn) so the next start is already right.
+const SCALE_MAX = [0.6, 0.85, 1], SCALE_MIN = [0.4, 0.45, 0.5];
+function startScale(q) { return clamp(S.dyn && S.dynQ === q ? S.dyn : isTouch ? 0.7 : SCALE_MAX[q], SCALE_MIN[q], SCALE_MAX[q]); }
 function applyQuality() {
   const q = S.quality;
   r.quality = q;
   r.setShadowSize(q === 2 ? 2048 : q === 1 ? 1024 : 0);
   r.shadowRadius = q === 2 ? 55 : 42;
-  r.dprScale = [0.6, 0.85, 1][q];
+  r.dprScale = startScale(q);
   ctx.lod2 = 0; r._shTex = null; if (scene && scene.land && scene.land.treeField) scene.land.treeField.detScale = 1;
   fx.quality = [0.35, 0.7, 1][q] * (ctx.load || 1);
   resize();
@@ -610,7 +613,7 @@ function updateHud(dt) {
   hudT = 0.05;
   drawGauge();
   const hp = player.health;
-  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + awakeCount() + ' awake / ' + world.dyn.length + ' loose / ' + world.bodies.length + ' all' + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
+  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + awakeCount() + ' awake / ' + world.dyn.length + ' loose / ' + world.bodies.length + ' all · ct ' + world.nc + ' · res ' + r.dprScale.toFixed(2) + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
   $('hpfill').style.width = (hp * 100).toFixed(0) + '%';
   $('hpfill').style.background = hp > 0.6 ? '#dfe3e8' : hp > 0.3 ? '#f5c400' : '#e5484d';
   $('cost').innerHTML = '$' + Math.round(player.cost).toLocaleString() + (propDmg > 500 ? '<small style="display:block;font-size:12px;font-weight:600;color:var(--muted)">property $' + Math.round(propDmg).toLocaleString() + '</small>' : '');
@@ -673,6 +676,7 @@ function syncMenu() {
   seg('segTod', 'tod', () => r.setTOD(S.tod));
   seg('segQ', 'quality', applyQuality);
   seg('segFps', 'fps', () => { ctx.load = 1; });
+  seg('segAA', 'aa', () => toast('Reload the page to apply smooth edges setting', ''));
   seg('segU', 'units');
   seg('segTilt', 'tilt', () => { if (S.tilt && window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); });
 }
@@ -714,8 +718,15 @@ function setLod2(n) {
   ctx.lod2 = n;
   const tf = scene && scene.land && scene.land.treeField; if (tf) tf.detScale = n >= 2 ? 0 : n === 1 ? 0.5 : 1;
   r.shadowRadius = (S.quality === 2 ? 55 : 42) * (n >= 1 ? 0.7 : 1);
-  if (n >= 3) { if (r.shadowTex) { r._shTex = r.shadowTex; r.shadowTex = null; } if (r.dprScale > 0.55) { r.dprScale = 0.55; resize(); } }
+  if (n >= 3) { if (r.shadowTex) { r._shTex = r.shadowTex; r.shadowTex = null; } }
   else if (!r.shadowTex && r._shTex) { r.shadowTex = r._shTex; r._shTex = null; }
+}
+const dyn = { ft: 16.7, t: 0, low: 0, hold: 0 };
+function setScale(v) {
+  v = clamp(v, SCALE_MIN[S.quality], SCALE_MAX[S.quality]);
+  if (Math.abs(v - r.dprScale) < 0.004) return;
+  r.dprScale = v; resize();
+  S.dyn = +v.toFixed(3); S.dynQ = S.quality; save();
 }
 const perfLab = new PerfLab({ r, S, ctx, fx, world, getScene: () => scene, resize, setLod2, hideMenu: (h) => { $('menu').style.visibility = h ? 'hidden' : ''; } });
 let warmUntil = 0;   // no start-up lock: the load governor already ignores one-off hitches (dt > 0.09), so detail scales from the first frame
@@ -803,30 +814,39 @@ function frame(t) {
   const now = t / 1000;
   const tgt = S.fps || 0;                       // user's target FPS (0 = unlimited)
   if (tgt && now - last < 1 / tgt - 0.003) return;   // frame cap: saves heat + battery
-  let dt = Math.min(0.05, now - last); last = now;
+  const dtRaw = now - last;                      // the real frame interval (dt below is capped for the simulation)
+  let dt = Math.min(0.05, dtRaw); last = now;
   if (!player) return;
   fpsAvg = fpsAvg * 0.95 + dt * 1000 * 0.05;
-  // load governor: when the frame rate drops under the target, shed detail (particles, rubble, resolution) in steps; recover when there is headroom
+  // ---- load governor. This GPU's cost is per pixel (Perf Lab, Tab S10 FE+: scale 1.0 = 86 ms, 0.7 = 37 ms, 0.5 = 26 ms), so RESOLUTION is the first and fastest lever. It is steered by the
+  // real frame interval: new scale = old scale x sqrt(target / measured), because the cost follows the pixel count. The last good scale is remembered (S.dyn), so a start is not slow.
+  // Only when the resolution is at its floor (or physics is the limit) and the frame is still slow are particles, rubble, leaf-trees and shadows reduced. Recovery runs the other way round.
   const goal = tgt || 60, fpsNow = 1000 / Math.max(fpsAvg, 1);
-  // the first seconds after loading / pressing Play are full of one-off work (shader compile, mesh upload, audio start): never shed detail for that
   const warm = now < warmUntil;
-  if (perfLab.active) { lowT = 0; highT = 0; }
-  else if (warm) { lowT = 0; highT = 0; fpsAvg = Math.min(fpsAvg, 1000 / goal * 1.05); if ((ctx.load ?? 1) < 1 || r.dprScale < [0.6, 0.85, 1][S.quality]) { ctx.load = 1; fx.quality = [0.35, 0.7, 1][S.quality]; r.dprScale = [0.6, 0.85, 1][S.quality]; } }
-  else if (dt > 0.09) { /* hitch (one-off), ignore */ }
-  else if (fpsNow < goal * 0.7) { lowT += dt * 1.5; highT = 0; } else if (fpsNow < goal * 0.85) { lowT += dt; highT = 0; } else if (fpsNow > goal * 0.95) { highT += dt; lowT = 0; } else { lowT = highT = 0; }
-  const load = ctx.load === undefined ? 1 : ctx.load;
-  if (lowT > 2.0) {
-    lowT = 0;
-    if (load > 0.5) { ctx.load = Math.max(0.5, load - 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
-    else if (r.dprScale > 0.7) { r.dprScale = Math.max(0.7, r.dprScale - 0.1); resize(); }
-    else if ((ctx.lod2 || 0) < 3) { setLod2((ctx.lod2 || 0) + 1); lodHold = now + 20; }          // still too slow: fewer leaf-trees, smaller shadow, then pictures-only trees, then no shadow
-  }
-  if (highT > 1.5) {
-    highT = 0;
-    const dm = [0.6, 0.85, 1][S.quality];
-    if ((ctx.lod2 || 0) > 0) { if (now > lodHold) setLod2(ctx.lod2 - 1); }                // the extreme steps come back first, but never within 20 s of going down (no flapping)
-    else if (r.dprScale < dm) { r.dprScale = Math.min(dm, r.dprScale + 0.05); resize(); }
-    else if (load < 1) { ctx.load = Math.min(1, load + 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
+  const Tms = 1000 / goal;
+  if (perfLab.active || warm) { dyn.t = 0; dyn.low = 0; dyn.ft = Tms; }
+  else if (dtRaw > 1) { /* tab switch / suspended: ignore */ }
+  else {
+    dyn.ft += (Math.min(dtRaw, 0.25) * 1000 - dyn.ft) * 0.1;   // one long hitch (shader compile, GC) counts at most as 250 ms
+    dyn.t += dtRaw;
+    if (dyn.t > 0.5) {
+      dyn.t = 0;
+      const cpu = PF.ph + PF.up + PF.fx;                                  // JS-side work (physics, update, effects): a lower resolution does not help with that
+      if (dyn.ft > Tms * 1.15) {
+        if (dyn.ft - cpu > Tms * 0.6 && r.dprScale > SCALE_MIN[S.quality] + 0.005) { setScale(r.dprScale * clamp(Math.sqrt(Tms / dyn.ft), 0.78, 0.97)); dyn.hold = now + 5; dyn.low = 0; }
+        else if (++dyn.low >= 4) {                                        // 2 s still slow: resolution is at its floor, or physics is the limit -> shed the other detail
+          dyn.low = 0; dyn.hold = now + 8;
+          const load = ctx.load ?? 1;
+          if (load > 0.5) { ctx.load = Math.max(0.5, load - 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; }
+          else if ((ctx.lod2 || 0) < 3) setLod2((ctx.lod2 || 0) + 1);
+        }
+      } else if (dyn.ft < Tms * 1.06 && now > dyn.hold) {
+        dyn.low = 0;
+        if ((ctx.lod2 || 0) > 0) { setLod2(ctx.lod2 - 1); dyn.hold = now + 12; }
+        else if ((ctx.load ?? 1) < 1) { ctx.load = Math.min(1, (ctx.load ?? 1) + 0.1); fx.quality = [0.35, 0.7, 1][S.quality] * ctx.load; dyn.hold = now + 6; }
+        else if (r.dprScale < SCALE_MAX[S.quality] - 0.005) { setScale(r.dprScale * 1.05); dyn.hold = now + 6; }
+      } else dyn.low = 0;
+    }
   }
   // grass density: its own small governor (never thins grass for one slow frame; steps down when the average stays under ~24 fps, creeps back up when there is room)
   if (!warm && !perfLab.active && dt <= 0.09 && scene.land && scene.land.soil) {

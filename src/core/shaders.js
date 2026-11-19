@@ -15,6 +15,7 @@ vec3 skyAvg(vec3 d){
 }
 // analytic environment used for reflections and the visible sky
 vec3 skyEnv(vec3 d, float rough){
+  if (rough >= 0.75) return skyAvg(d) * uSkyI;   // from rough 0.7407 up the last line replaces the whole colour by skyAvg: skip the band / sun / atan work
   float h = d.y;
   vec3 col = mix(uSkyHor, uSkyTop, pow(clamp(h,0.,1.), 0.42));
   float az = atan(d.z, d.x);
@@ -176,14 +177,20 @@ float pebbles(vec2 gp, float pw, out float shade){
   shade = h21(i + 2.2);
   return (1. - smoothstep(rad * .75, rad, length(f - o))) * bl(38., pw);
 }
-float shadowPCF(vec4 sc){
+float shadowPCF(vec4 sc, float dist){
   vec3 p = sc.xyz / sc.w * 0.5 + 0.5;
   if (p.z >= 1. || p.x <= 0. || p.x >= 1. || p.y <= 0. || p.y >= 1.) return 1.;
   float s = 0.;
   float t = uShadowTexel;
-  for (int i=-1;i<=1;i++) for (int j=-1;j<=1;j++)
-    s += texture(uShadowMap, vec3(p.xy + vec2(float(i), float(j)) * t * 1.25, p.z - 0.00012));
-  s /= 9.;
+  if (dist > 22.) {
+    // beyond 22 m four taps are enough (each tap is already a 2x2 hardware comparison): the shadow edge is below a pixel's resolving power there
+    float o = t * 0.9, z = p.z - 0.00012;
+    s = 0.25 * (texture(uShadowMap, vec3(p.xy + vec2(-o, -o), z)) + texture(uShadowMap, vec3(p.xy + vec2(o, -o), z)) + texture(uShadowMap, vec3(p.xy + vec2(-o, o), z)) + texture(uShadowMap, vec3(p.xy + vec2(o, o), z)));
+  } else {
+    for (int i=-1;i<=1;i++) for (int j=-1;j<=1;j++)
+      s += texture(uShadowMap, vec3(p.xy + vec2(float(i), float(j)) * t * 1.25, p.z - 0.00012));
+    s /= 9.;
+  }
   vec2 e = min(p.xy, 1.-p.xy);
   float edge = smoothstep(0., 0.08, min(e.x, e.y));
   return mix(1., s, edge);
@@ -208,8 +215,12 @@ float vor(vec3 p, out float cellId){
 
 vec3 asphalt(vec3 wp, float dist, float pw, out float rough){
   vec2 p = wp.xz;
-  float n1 = vn2(p*0.7), n2 = vn2(p*3.1), n3 = vn2(p*13.), n4 = vn2(p*41.);
-  float g = 0.30 + 0.07*(n1-.5) + 0.05*(n2-.5)*bl(3.1,pw) + 0.07*(n3-.5)*bl(13.,pw) + 0.09*(n4-.5)*bl(41.,pw);
+  float b2 = bl(3.1,pw), b3 = bl(13.,pw), b4 = bl(41.,pw);
+  float n1 = vn2(p*0.7), n2 = .5, n3 = .5, n4 = .5;      // an octave a pixel cannot resolve has weight 0: it is not evaluated
+  if (b2 > 0.003) n2 = vn2(p*3.1);
+  if (b3 > 0.003) n3 = vn2(p*13.);
+  if (b4 > 0.003) n4 = vn2(p*41.);
+  float g = 0.30 + 0.07*(n1-.5) + 0.05*(n2-.5)*b2 + 0.07*(n3-.5)*b3 + 0.09*(n4-.5)*b4;
   float pch = smoothstep(.55,.7,vn2(p*0.09));
   g += pch*0.03;
   rough = 0.82 - 0.1*pch;
@@ -300,8 +311,11 @@ void main(){
       }
     }
     // tar-sealed hairline cracks in patches (dark, a touch glossier)
-    float cm = smoothstep(.58, .72, vn2(rp * 0.045 + 3.)), cw = 0.014 + 0.5 * pw, ck = (1. - smoothstep(0., cw, abs(vn2(rp * 0.42 + 9.) - .5))) * (0.014 / cw);
-    float cvis = cm * ck * (1. - smoothstep(10., 60., dist));
+    float cvis = 0., cfd = 1. - smoothstep(10., 60., dist);
+    if (cfd > 0.004) {
+      float cm = smoothstep(.58, .72, vn2(rp * 0.045 + 3.)), cw = 0.014 + 0.5 * pw, ck = (1. - smoothstep(0., cw, abs(vn2(rp * 0.42 + 9.) - .5))) * (0.014 / cw);
+      cvis = cm * ck * cfd;
+    }
     albedo *= 1. - 0.55 * cvis; rough = mix(rough, 0.42, cvis);
   } else if (uKind == 1) {
     // car paint: tinted base with metallic flake + clear coat; decals/panel lines from texture
@@ -325,8 +339,12 @@ void main(){
     // natural ground: soil / grass / dry grass. Patchy at large scale, clods and blades up close, no repeating texture
     vec2 gp = vWorldMod.xz * uTexScale;
     float pwg = pw * uTexScale;
-    float n0 = vn2(gp*0.011), n1 = vn2(gp*0.07), n2 = vn2(gp*0.45), n3 = vn2(gp*2.4), n4 = vn2(gp*13.), n5 = vn2(gp*21. + 5.);
     float f1 = 1.-smoothstep(40.,260.,dist), f2 = 1.-smoothstep(6.,45.,dist), f3 = 1.-smoothstep(1.5,16.,dist);
+    // the fine octaves only where their weight is not zero: beyond 16 m / 45 m / 260 m they are not evaluated at all
+    float n0 = vn2(gp*0.011), n1 = .5, n2 = .5, n3 = .5, n4 = .5, n5 = .5;
+    if (f1 > 0.003) { n1 = vn2(gp*0.07); n2 = vn2(gp*0.45); }
+    if (f2 > 0.003) n3 = vn2(gp*2.4);
+    if (f3 > 0.003) { n4 = vn2(gp*13.); n5 = vn2(gp*21. + 5.); }
     float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3*bl(13., pwg) + 0.12*(n5-.5)*f3*bl(21., pwg);
     albedo = uBase * vCol * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
     if (uFlake > 0.5 && uFlake < 1.5) albedo *= vec3(0.84, 0.76, 0.82) * mix(0.68, 1., smoothstep(1., 30., dist));   // real turf is darker and more olive than candy green, and darkest close up where blades shade the ground between them
@@ -499,13 +517,22 @@ void main(){
       vec3 wp = vWorldMod;
       vec2 sp = abs(vNrm.y) > 0.7 ? wp.xz : vec2(wp.x * abs(vNrm.z) + wp.z * abs(vNrm.x), wp.y);
       float nr = 1. - smoothstep(4., 28., dist), md = 1. - smoothstep(25., 130., dist);
-      float g1 = vn2(sp * 46.), g2 = vn2(sp * 9.), g3 = vn2(vec2(sp.x * 1.6, sp.y * 0.2));
-      // old walls are not all equally grimy: a slow patchwork (per ~9 m of wall) decides how much staining a stretch carries
-      float wv = mix(0.3, 1., smoothstep(.3, .7, vn2(vec2(wp.x * 0.11 + wp.z * 0.17, wp.y * 0.07 + 3.1))));
-      albedo *= 1. + 0.02 * (g1 - .5) * nr + (0.06 * (g2 - .5) * md - 0.12 * (g3 - .45) * md) * wv;
-      vec3 tN = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
-      float e = 0.0035, hx = vn2((sp + vec2(e, 0.)) * 46.), hy = vn2((sp + vec2(0., e)) * 46.);
-      N = normalize(N + (tN * (g1 - hx) + vec3(0., 1., 0.) * (g1 - hy)) * 0.45 * nr);
+      float wad = 0.;
+      // each layer only where it is visible: grain and roughcast bumps inside 28 m, blotches and streaks inside 130 m (the noise is not even evaluated outside)
+      if (md > 0.004) {
+        float g2 = vn2(sp * 9.), g3 = vn2(vec2(sp.x * 1.6, sp.y * 0.2));
+        // old walls are not all equally grimy: a slow patchwork (per ~9 m of wall) decides how much staining a stretch carries
+        float wv = mix(0.3, 1., smoothstep(.3, .7, vn2(vec2(wp.x * 0.11 + wp.z * 0.17, wp.y * 0.07 + 3.1))));
+        wad = (0.06 * (g2 - .5) * md - 0.12 * (g3 - .45) * md) * wv;
+      }
+      if (nr > 0.004) {
+        float g1 = vn2(sp * 46.);
+        wad += 0.02 * (g1 - .5) * nr;
+        vec3 tN = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
+        float e = 0.0035, hx = vn2((sp + vec2(e, 0.)) * 46.), hy = vn2((sp + vec2(0., e)) * 46.);
+        N = normalize(N + (tN * (g1 - hx) + vec3(0., 1., 0.) * (g1 - hy)) * 0.45 * nr);
+      }
+      albedo *= 1. + wad;
     }
   }
 
@@ -515,7 +542,7 @@ void main(){
   float a = max(rough*rough, 0.002);
   float NdL = max(dot(N, uSunDir), 0.);
   float sh = 1.;
-  if (uShadowOn > 0.5) sh = shadowPCF(vShadow);
+  if (uShadowOn > 0.5) sh = shadowPCF(vShadow, dist);
   float sunVis = NdL * sh;
   vec3 H = normalize(uSunDir + Vv);
   float NdH = max(dot(N, H), 0.), VdH = max(dot(Vv, H), 0.);

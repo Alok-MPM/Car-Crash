@@ -589,7 +589,9 @@ export class World {
     }
     this.collide();
     this.prepare(dt);
-    for (let it = 0; it < this.iters; it++) this.iterate();
+    // a pile of broken wall (hundreds of contacts) does not need twelve solver sweeps: fewer sweeps when there are many contacts, the full twelve whenever the scene is calm
+    const nIt = this.nc > 1200 ? 5 : this.nc > 700 ? 6 : this.nc > 400 ? 8 : this.iters;
+    for (let it = 0; it < nIt; it++) this.iterate();
     // A crash may take speed away from the car, never give it any: dozens of overlapping contacts (a wall full of freshly broken panels) used to add up to a
     // 110 m/s kick that threw the car back and up. Out-speed of the hit is capped at 30 % of the speed it came in with (+3 m/s), and it cannot be launched upward or spun up wildly.
     for (const b of guard) {
