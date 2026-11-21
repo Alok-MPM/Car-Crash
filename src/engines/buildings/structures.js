@@ -165,12 +165,21 @@ export class Structures {
     for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) list.push(d.body);
     return list;
   }
-  // how far the wreck reaches beyond the footprint (m): the farthest loose piece, 2..30
+  // how far the wreck reaches beyond the footprint (m): the farthest loose piece, 2..30. Also B.wr = the rectangle that holds the footprint and every loose piece
+  // (a piece's size included): that is the real "active zone" of a wreck - a car 3 m from a clean side of it does not need the far side's rubble awake.
   spreadOf(B) {
-    const f = B.fp; let m = 2;
-    const see = (b) => { if (!b || b.fixed) return; const dx = Math.max(f.x0 - b.pos[0], 0, b.pos[0] - f.x1), dz = Math.max(f.z0 - b.pos[2], 0, b.pos[2] - f.z1); const d = Math.hypot(dx, dz); if (d > m) m = d; };
-    for (const P of B.free) see(P.body);
-    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) see(d.body);
+    const f = B.fp; let m = 2, x0 = f.x0, x1 = f.x1, z0 = f.z0, z1 = f.z1;
+    const see = (b, pad) => {
+      if (!b || b.fixed) return;
+      const px = b.pos[0], pz = b.pos[2];
+      const dx = Math.max(f.x0 - px, 0, px - f.x1), dz = Math.max(f.z0 - pz, 0, pz - f.z1); const d = Math.hypot(dx, dz);
+      if (d > m) m = d;
+      if (d > 30) return;                                    // a lump thrown far away is its own business (it is a mover while it flies, a sleeper once it lies)
+      if (px - pad < x0) x0 = px - pad; if (px + pad > x1) x1 = px + pad; if (pz - pad < z0) z0 = pz - pad; if (pz + pad > z1) z1 = pz + pad;
+    };
+    for (const P of B.free) see(P.body, 1.2);
+    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) see(d.body, 0.5);
+    B.wr = { x0, x1, z0, z1 };
     return Math.min(30, m + 1);
   }
   // A wrecked building may freeze into a "photo" once everything of it has come to rest: nothing is still falling, no collapse is pending, and
@@ -200,6 +209,15 @@ export class Structures {
   }
   // force: the player has been clear of this wreck for several seconds and a piece still has not come to rest (a plate jittering in a pile, a lump rolling on a slope).
   // Nobody can see it, so it is put to sleep where it lies instead of keeping hundreds of bodies awake for ever.
+  // nothing of the wreck moves faster than 2 m/s: what is left is jitter in a pile
+  calm(B) {
+    let ok = true;
+    const chk = (b) => { if (!ok || !b || b.fixed || b.sleeping || b.removed || b.pos[1] < -20) return; if (b.v[0] * b.v[0] + b.v[1] * b.v[1] + b.v[2] * b.v[2] > 4) ok = false; };
+    for (const P of B.free) chk(P.body);
+    for (const it of B.lay.furn) chk(it.body);
+    for (const d of this.rubble) if (d.B === B && !d.dead && d.t < 900) chk(d.body);
+    return ok;
+  }
   restAll(B) {
     const rest = (b) => { if (!b || b.fixed || b.removed) return; b.v[0] = b.v[1] = b.v[2] = 0; b.w[0] = b.w[1] = b.w[2] = 0; b.sleep(); };
     for (const P of B.free) rest(P.body);
@@ -228,27 +246,33 @@ export class Structures {
       const alive = B.stash.filter((b) => !(b.rub && (b.rub.t >= 900 || b.rub.dead)) && !(b.panel && b.panel.state === 'gone') && b.pos[1] > -30);
       B.stash = null; this.world.addMany(alive);
     } else this.world.addMany(this.bodiesOf(B));
-    B.dormant = false; B.far = 0;
+    B.dormant = false; B.farT = null;
   }
   sleepAll() { this.lazyOn = true; for (const B of this.list) this.sleepBuilding(B); }
   // Does the swept corridor of a watcher (segment (x,z)->(x2,z2), radius r) touch the building footprint grown by m metres?
   static reach(B, p, m) { const f = B.fp; return segHitsRect(p.x, p.z, p.x2, p.z2, f.x0, f.z0, f.x1, f.z1, p.r + m); }
+  static reachRect(R, p, m) { return segHitsRect(p.x, p.z, p.x2, p.z2, R.x0, R.z0, R.x1, R.z1, p.r + m); }
   // pts: watchers [{x,z,x2,z2,r}] = a car's path for the next fraction of a second, or a walking person (x2=x). A building is awake only while a watcher's path
   // reaches it; waking happens in the same frame, before the physics step, so there is no delay and nothing to bounce off.
-  // A building that was hit keeps its wreck (loose pieces) awake while a watcher is near; ~10 m clear of the wreck it freezes into a photo: no bodies at all,
-  // drawn exactly as it lies. Coming back within reach thaws every piece in the pose it was frozen in.
+  // A building that was hit keeps its wreck (loose pieces) awake only while a watcher's path reaches the rectangle the pieces lie in; 3 m clear of it, and settled for
+  // 0.4 s (or 2.5 s whatever happens), it freezes into a photo: no bodies at all, drawn exactly as it lies. Coming back within reach thaws every piece in the pose it was frozen in.
+  // Times are real seconds, not frames: at 20 FPS a frame count would take three times as long.
   updateDormancy(pts) {
     if (!this.lazyOn) return;
+    const now = performance.now() / 1000;
     for (const B of this.list) {
       if (B.removed || !B.lazy || !B.fp) continue;
       const dmg = B.freed > 0 || B.free.size > 0 || !!B.stash;
       if (dmg && !B.dormant && (B.spT = (B.spT || 0) + 1) % 15 === 0) B.spread = this.spreadOf(B);
-      const sp = dmg ? Math.min(B.spread || 8, 14) : 0;
+      const R = dmg && B.wr ? B.wr : B.fp;
       let near = false, far = true;
-      for (const p of pts) { if (p.own === B) continue; if (Structures.reach(B, p, sp)) { near = true; far = false; break; } if (far && Structures.reach(B, p, sp + 6)) far = false; }
+      for (const p of pts) { if (p.own === B) continue; if (Structures.reachRect(R, p, 0)) { near = true; far = false; break; } if (far && Structures.reachRect(R, p, 3)) far = false; }
       if (B.dormant) { if (near) this.wakeBuilding(B); }
-      else if (far) { B.far = (B.far || 0) + 1; if (B.far > 24 && this.sleepBuilding(B, B.far > 300)) B.far = 0; }   // 300 frames (~5 s) clear of the wreck: freeze it even if a piece never settles
-      else B.far = Math.max(0, (B.far || 0) - 4);            // a watcher flickering past does not wipe the count, only a lasting one does
+      else if (far) {
+        if (B.farT == null) B.farT = now;
+        const clear = now - B.farT;
+        if (clear > 0.4 && (B.chk = (B.chk || 0) + 1) % 4 === 0 && this.sleepBuilding(B, clear > 12 || (clear > 2.5 && this.calm(B)))) B.farT = null;   // forced only when nothing is still flying (never freeze a collapse in mid air)
+      } else B.farT = null;
     }
   }
 

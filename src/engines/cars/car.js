@@ -444,7 +444,9 @@ export class Car {
     const { r } = this.ctx;
     const b = this.body;
     // a parked / roaming car far beyond the draw distance (and the shadow radius) costs nothing: no matrices, no wheel maths, no garbage
-    { const e = r.eye, dx = b.pos[0] - e[0], dz = b.pos[2] - e[2]; if (dx * dx + dz * dz > 520 * 520) return; }
+    const e = r.eye, dx = b.pos[0] - e[0], dz = b.pos[2] - e[2], d2 = dx * dx + dz * dz;
+    if (d2 > 520 * 520) return;
+    const nearC = d2 < 45 * 45;   // brake calipers sit behind the spokes: not worth a draw call beyond 45 m
     const M = this._m || (this._m = new Float32Array(16));
     m4.fromTRS(M, b.pos, b.q, 1);
     r.add(this.mesh, M, { hide: this.hide });
@@ -475,6 +477,7 @@ export class Car {
       m4.mul(A, M, T);
       r.add(wm.spin, A);
       // caliper: steer only (no spin), flipped on the left
+      if (!nearC) continue;
       const fl2 = w.side > 0 ? [1, 0, 0, 0, 1, 0, 0, 0, 1] : [-1, 0, 0, 0, 1, 0, 0, 0, -1];
       const R4 = mm3(st, fl2);
       T[0] = R4[0]; T[1] = R4[1]; T[2] = R4[2]; T[4] = R4[3]; T[5] = R4[4]; T[6] = R4[5]; T[8] = R4[6]; T[9] = R4[7]; T[10] = R4[8];

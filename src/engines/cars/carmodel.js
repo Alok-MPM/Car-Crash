@@ -41,7 +41,8 @@ export function wheelLayout(spec) {
 }
 
 // ---------- body loft ----------
-const KB = [2, 3, 3, 2, 2, 2, 1, 2]; // samples per control segment (body half section)
+const KS = 1; // ring tessellation multiplier (the jForX/jForY limits below scale with it)
+const KB = [2, 3, 3, 2, 2, 2, 1, 2].map((v) => v * KS); // samples per control segment (body half section)
 const KG = [3, 3, 5, 6, 4]; // glasshouse
 
 export function buildBody(spec) {
@@ -69,8 +70,29 @@ export function buildBody(spec) {
   const pl = 0.12;
   const endK = [0, 0.015, 0.05, 0.12, 0.22, 0.38, 0.6, 1.0];
   for (const e of endK) { zset.push(pl * e); zset.push(L - pl * e); }
-  for (let z = pl; z < L - pl; z += 0.085) zset.push(z);
-  for (const a of arch) for (let z = a.zc - a.ra - 0.06; z <= a.zc + a.ra + 0.06; z += 0.04) zset.push(z);
+  // stations: ~0.085 m on the plain body and ~0.04 m inside each wheel-arch zone, never two interleaved sequences. Neighbouring stations that alternate 0.015 / 0.04 / 0.085 m apart
+  // made the area-weighted vertex normals alternate by about a degree station to station, which shows as vertical stripes in the paint reflection.
+  // Every free stretch (and every zone) is divided into equal steps, so spacing only changes once per boundary.
+  const zones = [];
+  for (const q of arch) { const a0 = Math.max(pl, q.zc - q.ra - 0.06), b0 = Math.min(L - pl, q.zc + q.ra + 0.06); if (b0 > a0) zones.push([a0, b0]); }
+  zones.sort((p, q) => p[0] - q[0]);
+  const zm = [];
+  for (const zn of zones) { const t = zm[zm.length - 1]; if (t && zn[0] <= t[1]) t[1] = Math.max(t[1], zn[1]); else zm.push([zn[0], zn[1]]); }
+  const fill = (e0, e1, h) => { if (e1 - e0 < 1e-4) return; const n = Math.max(1, Math.round((e1 - e0) / h)); for (let k = 0; k <= n; k++) zset.push(e0 + (e1 - e0) * k / n); };
+  // a free stretch: the step eases from the neighbouring zone's 0.04 to 0.085 (x1.22 per station) so spacing never jumps by 2x between neighbours
+  const ease = (e0, e1, s0, s1) => {
+    if (e1 - e0 < 1e-4) return;
+    const mid = (e0 + e1) / 2, f = [e0], g = [e1];
+    for (let z = e0, h = s0; ; ) { h = Math.min(0.085, h * 1.22); z += h; if (z >= mid) break; f.push(z); }
+    for (let z = e1, h = s1; ; ) { h = Math.min(0.085, h * 1.22); z -= h; if (z <= mid) break; g.push(z); }
+    const pts = f.concat(g).sort((x, y) => x - y), keep = [pts[0]];
+    for (let i = 1; i < pts.length; i++) if (pts[i] - keep[keep.length - 1] > 0.03 || i === pts.length - 1) keep.push(pts[i]);
+    for (let i = 1; i < keep.length; i++) { const gap = keep[i] - keep[i - 1]; if (gap > 0.13) { const n = Math.round(gap / 0.085); for (let k = 1; k < n; k++) keep.push(keep[i - 1] + gap * k / n); } }
+    for (const z of keep) zset.push(z);
+  };
+  let cur = pl, curEase = 0.085;
+  for (const [a0, b0] of zm) { ease(cur, a0, curEase, 0.04); fill(a0, b0, 0.04); cur = b0; curEase = 0.04; }
+  ease(cur, L - pl, curEase, 0.085);
   zset.sort((a, b) => a - b);
   const zs = [];
   for (const z of zset) if (z >= 0 && z <= L && (!zs.length || z - zs[zs.length - 1] > 0.0015)) zs.push(z);
@@ -223,7 +245,7 @@ export class Builder {
     this.nv = 0;
   }
   grp(part, mat) {
-    const k = part * 64 + MAT_ORDER.indexOf(mat);
+    const k = MAT_ORDER.indexOf(mat) * 64 + part;   // material-major: the same material of different parts sits side by side in the index buffer, so an intact car draws one range per material
     let g = this.groups.get(k);
     if (!g) { g = { part, mat, idx: [], map: new Map() }; this.groups.set(k, g); }
     return g;
@@ -319,7 +341,7 @@ export function buildCarGeometry(spec) {
   computeNormals(B.pos, idxAll, bNrm);
   // outward check on a flank vertex
   {
-    const i = Math.floor(B.nS / 2), j = Math.floor(B.K / 2) + 3;
+    const i = Math.floor(B.nS / 2), j = Math.floor(B.K / 2) + 3 * KS;
     const o = (i * B.M + j) * 3;
     if (bNrm[o] * Math.sign(B.pos[o]) < 0 && Math.abs(B.pos[o]) > 0.2) { for (let t = 0; t < idxAll.length; t += 3) { const x = idxAll[t + 1]; idxAll[t + 1] = idxAll[t + 2]; idxAll[t + 2] = x; } computeNormals(B.pos, idxAll, bNrm); }
   }
@@ -332,7 +354,8 @@ export function buildCarGeometry(spec) {
       const y = B.pos[o * 3 + 1];
       const bt = B.fn.bot(B.zs[i]);
       const ao = 0.6 + 0.4 * smoothstep(bt, bt + 0.3, y);
-      bCol[o * 3] = bCol[o * 3 + 1] = bCol[o * 3 + 2] = ao;
+      // r stays 1: it is the DAMAGE channel (shader: dmg = 1 - r; deformAt only ever lowers it). The sill occlusion rides on g/b, otherwise the shader reads it as scratched paint and fades the clear coat / roughens it along a vertex-interpolated band
+      bCol[o * 3] = 1; bCol[o * 3 + 1] = bCol[o * 3 + 2] = ao;
     }
   const bGrid = { pos: B.pos, nrm: bNrm, uv: bUv, col: bCol };
   const hwAt = B.fn.hw;
@@ -777,8 +800,8 @@ export function paintDecals(ctx, W, H, spec, B) {
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   const stationAt = (z) => { let bi = 0, bd = 1e9; for (let i = 0; i < B.nS; i++) { const d = Math.abs(B.zs[i] - z); if (d < bd) { bd = d; bi = i; } } return bi; };
   // right-hand ring index for a given height on the flank (j in 0..K), or for a given |x| on the top
-  const jForY = (st, y) => { const h = B.sec[st]; for (let j = 3; j < B.K - 1; j++) if (h[j][1] >= y && h[j + 1][1] < y) return j + (h[j][1] - y) / (h[j][1] - h[j + 1][1] || 1); return 4; };
-  const jForX = (st, x) => { const h = B.sec[st]; for (let j = 0; j < 4; j++) if (h[j][0] <= x && h[j + 1][0] > x) return j + (x - h[j][0]) / (h[j + 1][0] - h[j][0] || 1); return x > h[3][0] ? 3 : 0; };
+  const jForY = (st, y) => { const h = B.sec[st]; for (let j = 3 * KS; j < B.K - 1; j++) if (h[j][1] >= y && h[j + 1][1] < y) return j + (h[j][1] - y) / (h[j][1] - h[j + 1][1] || 1); return 4 * KS; };
+  const jForX = (st, x) => { const h = B.sec[st]; for (let j = 0; j < 4 * KS; j++) if (h[j][0] <= x && h[j + 1][0] > x) return j + (x - h[j][0]) / (h[j + 1][0] - h[j][0] || 1); return x > h[3 * KS][0] ? 3 * KS : 0; };
   const px = (u, z) => [u * W, (z / L) * H];
   const line = (pts, w = 2, a = 0.85) => {
     ctx.strokeStyle = `rgba(6,6,8,${a})`; ctx.lineWidth = w;

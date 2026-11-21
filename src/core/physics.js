@@ -409,13 +409,20 @@ export class World {
     this.contacts = [];
     this.pool = [];
     this.nc = 0;
-    this.cache = new Map();
+    this.cache = new Map();         // last step's contact impulses per body pair (warm start): slots are recycled, a step allocates nothing
+    this.newCache = new Map();
+    this.slotPool = [];
+    this.events = new Map();
+    this._gridPool = [];
+    this._grid = new Map();
+    this._dynL = [];
+    this._tmp = [];
     this.iters = 12;
     this.onImpact = null;
     this.onScrape = null;
     this.preHit = null;
     this.staticDirty = true;
-    this.cell = 7;
+    this.cell = 4;   // measured on a collapsing-building scene: 7 m cells made 85k candidate pairs per step, 4 m cells 60k (collide ~35% cheaper); the key packs cx*8192+cz, which still spans +-16 km
     this.statics = [];
     this.time = 0;
   }
@@ -645,14 +652,18 @@ export class World {
     const cs = this.cell, bodies = this.dyn;
     if (this.staticDirty || !this.sgrid) this.buildStaticGrid();
     const sgrid = this.sgrid;
-    const grid = new Map();
+    const T = (this.tm = this.tm || { grid: 0, pair: 0, stat: 0, gnd: 0, cand: 0, sq: 0, nar: 0 });
+    let t0 = performance.now(), cand = 0, sq = 0;
+    const grid = this._grid, gp = this._gridPool;
+    for (const l of grid.values()) { l.length = 0; gp.push(l); }
+    grid.clear();
     const cellRange = (b) => {
       const A = b.aabb;
       b._cx0 = Math.floor(A[0] / cs); b._cx1 = Math.floor(A[3] / cs);
       b._cz0 = Math.floor(A[2] / cs); b._cz1 = Math.floor(A[5] / cs);
     };
-    const tmp = [];
-    const dyn = [];
+    const tmp = this._tmp;
+    const dyn = this._dynL; dyn.length = 0;
     for (const b of bodies) {
       if (b.removed || b.fixed) continue;
       if (!b.sleeping) b.refresh();
@@ -664,10 +675,11 @@ export class World {
         for (let cz = b._cz0; cz <= b._cz1; cz++) {
           const key = cx * 8192 + cz;
           let l = grid.get(key);
-          if (!l) { l = []; grid.set(key, l); }
+          if (!l) { l = gp.pop() || []; grid.set(key, l); }
           l.push(b);
         }
     }
+    let t1 = performance.now(); T.grid = t1 - t0;
     this.pairs = 0;
     for (const [key, list] of grid) {
       if (list.length < 2) continue;
@@ -676,7 +688,7 @@ export class World {
       for (let i = 0; i < list.length; i++) {
         const a = list[i];
         for (let j = i + 1; j < list.length; j++) {
-          const b = list[j];
+          const b = list[j]; cand++;
           if (a.sleeping && b.sleeping) continue;
           if (!(a.mask & b.group) || !(b.mask & a.group)) continue;
           if ((a.ghostUntil > this.time && b.group === GROUP.CAR) || (b.ghostUntil > this.time && a.group === GROUP.CAR)) continue;   // crumbs born inside the striker do not collide with it for a moment (otherwise ~100 overlapping pieces fire the car out of the wall)
@@ -688,6 +700,7 @@ export class World {
         }
       }
     }
+    let t2 = performance.now(); T.pair = t2 - t1; T.cand = cand;
     // dynamic vs static (static grid is cached; only awake bodies query it)
     const qid = (this.qid = (this.qid || 0) + 1 + 0.0);
     let q = 0;
@@ -703,6 +716,7 @@ export class World {
             if (s._st === stamp || s.removed) continue;
             s._st = stamp;
             if (!(d.mask & s.group) || !(s.mask & d.group)) continue;
+            sq++;
             const A = d.aabb, B = s.aabb;
             if (A[3] < B[0] || B[3] < A[0] || A[4] < B[1] || B[4] < A[1] || A[5] < B[2] || B[5] < A[2]) continue;
             this.pairs++;
@@ -710,6 +724,7 @@ export class World {
           }
         }
     }
+    let t3 = performance.now(); T.stat = t3 - t2; T.sq = sq;
     // ground
     if (this.groundOn)
       for (const b of bodies) {
@@ -737,6 +752,7 @@ export class World {
               }
         }
       }
+    T.gnd = performance.now() - t3;
   }
 
   narrow(a, b, tmp) {
@@ -767,9 +783,8 @@ export class World {
   }
 
   prepare(dt) {
-    const newCache = new Map();
-    const events = new Map();
-    this.events = events;
+    const newCache = this.newCache, slotPool = this.slotPool;
+    const events = this.events; events.clear();
     const vA = [0, 0, 0], vB = [0, 0, 0];
     // breakable fixed bodies may give way before anything is solved. This has to be a pass of its own: a panel that breaks while the contact list is being prepared
     // used to leave the contacts prepared earlier (effective mass of an immovable wall) pointing at a body that was now light and free - the solver then overshot ~400x per iteration.
@@ -819,16 +834,17 @@ export class World {
       let isNew = true;
       if (prev) {
         isNew = false;
-        let bd = 0.0016, bi = null;
-        for (const pc of prev) {
-          const d = (pc.p[0] - c.p[0]) ** 2 + (pc.p[1] - c.p[1]) ** 2 + (pc.p[2] - c.p[2]) ** 2;
-          if (d < bd) { bd = d; bi = pc; }
+        let bd = 0.0016, bi = -1;
+        const pd = prev.d;
+        for (let k = 0, kn = prev.n * 6; k < kn; k += 6) {
+          const dx = pd[k] - c.p[0], dy = pd[k + 1] - c.p[1], dz = pd[k + 2] - c.p[2], d = dx * dx + dy * dy + dz * dz;
+          if (d < bd) { bd = d; bi = k; }
         }
-        if (bi) { c.jn = bi.jn * 0.9; c.jt1 = bi.jt1 * 0.9; c.jt2 = bi.jt2 * 0.9; }
+        if (bi >= 0) { c.jn = pd[bi + 3] * 0.9; c.jt1 = pd[bi + 4] * 0.9; c.jt2 = pd[bi + 5] * 0.9; }
       }
       let arr = newCache.get(key);
-      if (!arr) { arr = []; newCache.set(key, arr); }
-      arr.push(c);
+      if (!arr) { arr = slotPool.pop() || { n: 0, d: [], c: [] }; arr.n = 0; newCache.set(key, arr); }
+      arr.c[arr.n++] = c;
       // events
       if ((a.report || b.report) && c.vn0 < -1.2) {
         const ex = events.get(key);
@@ -842,8 +858,7 @@ export class World {
         this.applyP(a, b, c.ra, c.rb, px, py, pz);
       }
     }
-    // cache copies (contacts are pooled so snapshot values later in finish)
-    this.newCache = newCache;
+    // (contacts are pooled, so their impulses are copied into the slots in finish)
   }
 
   effMass(a, b, ra, rb, n) {
@@ -916,19 +931,19 @@ export class World {
   }
 
   finish(dt) {
-    // store cache snapshot values
-    const out = new Map();
-    for (const [key, arr] of this.newCache) {
-      out.set(key, arr.map((c) => ({ p: [c.p[0], c.p[1], c.p[2]], jn: c.jn, jt1: c.jt1, jt2: c.jt2 })));
+    // store the impulses of this step for the next step's warm start. Last step's slots go back to the pool, the new ones become the cache: no allocation
+    for (const arr of this.newCache.values()) {
+      const d = arr.d, cs = arr.c;
+      for (let k = 0; k < arr.n; k++) { const c = cs[k], o = k * 6; d[o] = c.p[0]; d[o + 1] = c.p[1]; d[o + 2] = c.p[2]; d[o + 3] = c.jn; d[o + 4] = c.jt1; d[o + 5] = c.jt2; cs[k] = null; }
     }
-    this.cache = out;
+    { const old = this.cache; for (const sl of old.values()) this.slotPool.push(sl); old.clear(); this.cache = this.newCache; this.newCache = old; }
     // wake sleeping bodies if hit hard
     for (let i = 0; i < this.nc; i++) {
       const c = this.pool[i];
       c.a._nw = c.b._nw = false;
-      for (const body of [c.a, c.b]) {
-        if (body.sleeping && !body.fixed && body.invMass * c.jn > 0.3) body.wake();
-      }
+      { const A = c.a, B = c.b;
+        if (A.sleeping && !A.fixed && A.invMass * c.jn > 0.3) A.wake();
+        if (B.sleeping && !B.fixed && B.invMass * c.jn > 0.3) B.wake(); }
       // scrape callback
       if (this.onScrape && (c.a.report || c.b.report) && c.vt0 > 2.5 && c.jn > 0) {
         this.onScrape(c.a.report ? c.a : c.b, c);

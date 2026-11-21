@@ -37,13 +37,16 @@ export const TOD = {
   night: { sun: [-0.4, 0.5, -0.6], sunCol: [0.35, 0.42, 0.7], top: [0.015, 0.025, 0.07], hor: [0.05, 0.07, 0.13], skyI: 0.9, fog: [0.03, 0.04, 0.08], fogD: 0.0009, ground: [0.04, 0.04, 0.05], night: 1, cloud: 0.2, sunI: 0.45 },
 };
 
+const ONE3 = [1, 1, 1], ZERO3 = [0, 0, 0];
 export class Renderer {
   constructor(canvas, opts = {}) {
-    const gl = canvas.getContext('webgl2', { antialias: opts.antialias !== false, alpha: false, powerPreference: 'high-performance', stencil: false, preserveDrawingBuffer: !!opts.preserve });
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', stencil: false, preserveDrawingBuffer: !!opts.preserve });
     if (!gl) throw new Error('WebGL2 not available');
     this.gl = gl; this.canvas = canvas;
     this.quality = opts.quality ?? 2;
-    this.dprScale = 1;
+    this.dprScale = opts.scale ?? 1;       // scene resolution relative to the screen's native pixels (the governor moves it; the canvas itself never changes size because of it)
+    this.outScale = opts.outScale ?? 1;   // canvas resolution relative to native pixels
+    this.fxaa = opts.fxaa !== false; this.sharpen = 0.35;
     this.progs = {
       main: program(gl, S.VS_MAIN, S.FS_MAIN),
       shadow: program(gl, S.VS_SHADOW, S.FS_SHADOW),
@@ -52,6 +55,7 @@ export class Renderer {
       part: program(gl, S.VS_PART, S.FS_PART),
       decal: program(gl, S.VS_DECAL, S.FS_DECAL),
       grass: program(gl, S.VS_GRASS, S.FS_GRASS),
+      post: program(gl, S.VS_POST, S.FS_POST),
     };
     this.grassMesh = this._makeGrassMesh(8); this.grassMeshFar = this._makeGrassMesh(5); this.grassMeshTri = this._makeGrassMesh(8, true);
     this.grassCfg = null;
@@ -103,12 +107,38 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
+  // The canvas has a fixed size (client size x native pixel ratio x outScale); the scene is drawn into an offscreen texture of canvas x dprScale and resolved to the canvas
+  // with FXAA. A new governor scale therefore only changes a viewport: no canvas reallocation, no flicker, no hitch.
   resize(w, h, dpr) {
-    const c = this.canvas;
-    const d = (dpr ?? Math.min(window.devicePixelRatio || 1, 2)) * this.dprScale;
+    const c = this.canvas, gl = this.gl;
+    const nat = (dpr ?? Math.min(window.devicePixelRatio || 1, 2));
     const cw = w ?? c.clientWidth ?? 800, ch = h ?? c.clientHeight ?? 600;
-    c.width = Math.max(2, Math.floor(cw * d)); c.height = Math.max(2, Math.floor(ch * d));
-    this.w = c.width; this.h = c.height;
+    const o = Math.min(1, this.outScale);
+    const ow = Math.max(2, Math.floor(cw * nat * o)), oh = Math.max(2, Math.floor(ch * nat * o));
+    if (c.width !== ow) c.width = ow;
+    if (c.height !== oh) c.height = oh;
+    this.outW = ow; this.outH = oh;
+    const sw = Math.max(2, Math.floor(cw * nat * this.dprScale)), sh = Math.max(2, Math.floor(ch * nat * this.dprScale));
+    // grow-only allocation: scaling down just uses a corner of it
+    if (!this.sceneTex || sw > this.allocW || sh > this.allocH) {
+      const aw = Math.max(sw, this.allocW || 0), ah = Math.max(sh, this.allocH || 0);
+      if (this.sceneTex) { gl.deleteTexture(this.sceneTex); gl.deleteRenderbuffer(this.sceneDepth); gl.deleteFramebuffer(this.sceneFB); }
+      this.sceneTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.sceneTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, aw, ah, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.sceneDepth = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, this.sceneDepth);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, aw, ah);
+      this.sceneFB = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFB);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.sceneTex, 0);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.sceneDepth);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this.allocW = aw; this.allocH = ah;
+    }
+    this.w = sw; this.h = sh;
   }
 
   setTOD(name) {
@@ -246,7 +276,7 @@ export class Renderer {
 
   render() {
     const gl = this.gl;
-    this.stats.draws = 0; this.stats.tris = 0;
+    this.stats.draws = 0; this.stats.tris = 0; this.stats.sdraws = 0; this._mc = null;
     const rel = (this._rel = this._rel || new Float32Array(16));
     // ---------- shadow pass
     if (this.shadowTex) {
@@ -287,22 +317,29 @@ export class Renderer {
           this._relModel(m, rel);
           gl.uniformMatrix4fv(P.u.uModel, false, rel);
           gl.bindVertexArray(mesh.vao);
+          // the depth-only program ignores materials, so neighbouring index ranges are drawn as ONE call (cars went from 53 shadow draws to ~8)
+          let rs = 0, re = 0, rt = null;
           for (const g of mesh.groups) {
             if (g.mat && (g.mat.kind === 2 || g.mat.kind === 8 || g.mat.noShadow || g.hidden)) continue;
             if (!!(g.mat && g.mat.cut) !== cut) continue;
             if (it.only !== undefined && g.part !== it.only) continue;
             if (it.hide && it.hide[g.part]) continue;
-            if (cut) gl.bindTexture(gl.TEXTURE_2D, g.mat.tex);
-            gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, g.start * 4);
+            if (g.count === 0) continue;
+            const tx = cut ? g.mat.tex : null;
+            if (re > rs && g.start === re && tx === rt) { re += g.count; continue; }
+            if (re > rs) { gl.drawElements(gl.TRIANGLES, re - rs, gl.UNSIGNED_INT, rs * 4); this.stats.sdraws++; }
+            rs = g.start; re = g.start + g.count; rt = tx;
+            if (cut) gl.bindTexture(gl.TEXTURE_2D, tx);
           }
+          if (re > rs) { gl.drawElements(gl.TRIANGLES, re - rs, gl.UNSIGNED_INT, rs * 4); this.stats.sdraws++; }
         }
         if (cut) gl.enable(gl.CULL_FACE);
       }
       gl.disable(gl.POLYGON_OFFSET_FILL); gl.cullFace(gl.BACK);
       gl.colorMask(true, true, true, true);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
-    // ---------- main pass
+    // ---------- main pass (into the offscreen scene texture; resolved to the canvas at the end)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFB);
     gl.viewport(0, 0, this.w, this.h);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -347,6 +384,7 @@ export class Renderer {
     gl.uniform4fv(u.uLP, lp); gl.uniform4fv(u.uLD, ld); gl.uniform4fv(u.uLC, lc);
     gl.uniform1i(u.uNL, nl);
     gl.uniform1f(u.uDbg, this.dbg || 0);
+    gl.uniform1f(u.uPixA, 2 / (this.proj[5] * this.h));      // metres per pixel per metre of distance: fine detail fades by pixel size, not by distance
     // deformable soil field (tyre prints, pits, torn grass): unit 2
     gl.uniform1i(u.uSoil, 2);
     gl.uniform2f(u.uEyeXZ, this.eye[0], this.eye[2]);
@@ -382,6 +420,8 @@ export class Renderer {
       this._relModel(it.model, rel);
       gl.uniformMatrix4fv(u.uModel, false, rel);
       gl.bindVertexArray(it.mesh.vao);
+      // neighbouring groups with the very same material object are one draw (parts of one material sit side by side in the index buffer)
+      let rm = null, rs = 0, re = 0;
       for (let gi = 0; gi < it.mesh.groups.length; gi++) {
         const g = it.mesh.groups[gi];
         if (g.hidden || g.count === 0) continue;
@@ -392,10 +432,11 @@ export class Renderer {
           trans.push({ it, g, mat, d: Math.hypot(it.model[12] - camPos[0], it.model[13] - camPos[1], it.model[14] - camPos[2]) });
           continue;
         }
-        this._setMat(u, mat);
-        gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, g.start * 4);
-        this.stats.draws++; this.stats.tris += g.count / 3;
+        if (rm === mat && g.start === re) { re += g.count; continue; }
+        if (rm) { this._setMat(u, rm); gl.drawElements(gl.TRIANGLES, re - rs, gl.UNSIGNED_INT, rs * 4); this.stats.draws++; this.stats.tris += (re - rs) / 3; }
+        rm = mat; rs = g.start; re = g.start + g.count;
       }
+      if (rm) { this._setMat(u, rm); gl.drawElements(gl.TRIANGLES, re - rs, gl.UNSIGNED_INT, rs * 4); this.stats.draws++; this.stats.tris += (re - rs) / 3; }
     }
     // real grass (instanced tufts rooted in the soil field)
     this._drawGrass();
@@ -403,6 +444,7 @@ export class Renderer {
     this._drawDecals();
     // transparent
     if (trans.length) {
+      this._mc = null;
       trans.sort((a, b) => b.d - a.d);
       gl.useProgram(P.p);
       gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -420,6 +462,30 @@ export class Renderer {
     // particles
     this._drawParticles();
     gl.bindVertexArray(null);
+    this._resolve();
+  }
+
+  // scene texture -> canvas: FXAA on edges, light sharpen elsewhere
+  _resolve() {
+    const gl = this.gl, P = this.progs.post, u = P.u;
+    if (gl.invalidateFramebuffer) gl.invalidateFramebuffer(gl.FRAMEBUFFER, [gl.DEPTH_ATTACHMENT]);   // tile GPUs need not write the depth back
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.outW, this.outH);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND); gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.depthMask(false);
+    gl.useProgram(P.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.sceneTex);
+    gl.uniform1i(u.uScene, 0);
+    gl.uniform2f(u.uReg, this.w / this.allocW, this.h / this.allocH);
+    gl.uniform2f(u.uPx, 1 / this.allocW, 1 / this.allocH);
+    gl.uniform1f(u.uAA, this.fxaa ? 1 : 0);
+    // upscaling softens the picture: the lower the scene resolution compared with the canvas, the more it is sharpened back
+    const up = this.outW / this.w;
+    gl.uniform1f(u.uSharp, this.sharpen * Math.min(1, Math.max(0, (up - 1) * 2.5)));
+    gl.bindVertexArray(this.emptyVAO);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
   }
 
   // one grass tuft = K blades x 5 vertices (base L/R, middle L/R, tip); everything else (position, height, bend, colour) is computed per instance in the vertex shader
@@ -480,25 +546,30 @@ export class Renderer {
     gl.useProgram(this.progs.main.p);
   }
 
+  // Material uniforms + raster state, with a per-frame cache: only values that really changed reach the driver (a draw used to push ~14 uniforms and 2 state toggles every time).
   _setMat(u, m) {
     const gl = this.gl;
-    gl.uniform1i(u.uKind, m.kind | 0);
-    const b = m.base || [1, 1, 1];
-    gl.uniform3f(u.uBase, b[0], b[1], b[2]);
-    const e = m.emis || [0, 0, 0];
-    gl.uniform3f(u.uEmis, e[0], e[1], e[2]);
-    gl.uniform1f(u.uMetal, m.metal || 0);
-    gl.uniform1f(u.uRough, m.rough ?? 0.5);
-    gl.uniform1f(u.uCoat, m.coat || 0);
-    gl.uniform1f(u.uAlpha, m.alpha ?? 1);
-    gl.uniform1f(u.uFlake, m.flake || 0);
-    gl.uniform1f(u.uTexScale, m.texScale || 1);
-    gl.uniform1f(u.uNear2, m.near2 || 0);
-    gl.uniform1f(u.uSway, m.sway || 0);
-    gl.uniform1f(u.uTerr, m.terr ? 1 : 0); gl.uniform1f(u.uUnder, m.under ? 1 : 0);
-    if (m.tex) { gl.uniform1f(u.uTexOn, 1); gl.bindTexture(gl.TEXTURE_2D, m.tex); } else gl.uniform1f(u.uTexOn, 0);
-    if (m.doubleSided) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
-    if (m.poly) { const lv = m.poly === true ? 2 : m.poly; gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-lv, -3 * lv); } else gl.disable(gl.POLYGON_OFFSET_FILL);
+    let c = this._mc;
+    if (!c) { c = this._mc = { m: null, kind: -1, br: NaN, bg: NaN, bb: NaN, er: NaN, eg: NaN, eb: NaN, metal: NaN, rough: NaN, coat: NaN, alpha: NaN, flake: NaN, ts: NaN, n2: NaN, sway: NaN, terr: NaN, under: NaN, texOn: -1, tex: undefined, ds: -1, poly: -99 }; }
+    if (c.m === m) return;
+    c.m = m;
+    const kind = m.kind | 0; if (kind !== c.kind) { gl.uniform1i(u.uKind, kind); c.kind = kind; }
+    const b = m.base || ONE3; if (b[0] !== c.br || b[1] !== c.bg || b[2] !== c.bb) { gl.uniform3f(u.uBase, b[0], b[1], b[2]); c.br = b[0]; c.bg = b[1]; c.bb = b[2]; }
+    const e = m.emis || ZERO3; if (e[0] !== c.er || e[1] !== c.eg || e[2] !== c.eb) { gl.uniform3f(u.uEmis, e[0], e[1], e[2]); c.er = e[0]; c.eg = e[1]; c.eb = e[2]; }
+    let v = m.metal || 0; if (v !== c.metal) { gl.uniform1f(u.uMetal, v); c.metal = v; }
+    v = m.rough ?? 0.5; if (v !== c.rough) { gl.uniform1f(u.uRough, v); c.rough = v; }
+    v = m.coat || 0; if (v !== c.coat) { gl.uniform1f(u.uCoat, v); c.coat = v; }
+    v = m.alpha ?? 1; if (v !== c.alpha) { gl.uniform1f(u.uAlpha, v); c.alpha = v; }
+    v = m.flake || 0; if (v !== c.flake) { gl.uniform1f(u.uFlake, v); c.flake = v; }
+    v = m.texScale || 1; if (v !== c.ts) { gl.uniform1f(u.uTexScale, v); c.ts = v; }
+    v = m.near2 || 0; if (v !== c.n2) { gl.uniform1f(u.uNear2, v); c.n2 = v; }
+    v = m.sway || 0; if (v !== c.sway) { gl.uniform1f(u.uSway, v); c.sway = v; }
+    v = m.terr ? 1 : 0; if (v !== c.terr) { gl.uniform1f(u.uTerr, v); c.terr = v; }
+    v = m.under ? 1 : 0; if (v !== c.under) { gl.uniform1f(u.uUnder, v); c.under = v; }
+    if (m.tex) { if (c.texOn !== 1) { gl.uniform1f(u.uTexOn, 1); c.texOn = 1; } if (c.tex !== m.tex) { gl.bindTexture(gl.TEXTURE_2D, m.tex); c.tex = m.tex; } } else if (c.texOn !== 0) { gl.uniform1f(u.uTexOn, 0); c.texOn = 0; }
+    const ds = m.doubleSided ? 1 : 0; if (ds !== c.ds) { if (ds) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE); c.ds = ds; }
+    const pl = m.poly ? (m.poly === true ? 2 : m.poly) : 0;
+    if (pl !== c.poly) { if (pl) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-pl, -3 * pl); } else gl.disable(gl.POLYGON_OFFSET_FILL); c.poly = pl; }
   }
 
   // ---- streams ----

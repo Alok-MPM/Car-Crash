@@ -18,14 +18,14 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 if (isTouch) document.documentElement.classList.add('touch');
 
 // ---------- persisted settings ----------
-const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1, aa: isTouch ? 0 : 1 };
+const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1, fxaa: 1 };
 let S = { ...defaults };
 try { Object.assign(S, JSON.parse(localStorage.getItem('crashyard') || '{}')); } catch (e) {}
 const save = () => { try { localStorage.setItem('crashyard', JSON.stringify(S)); } catch (e) {} };
 
 // ---------- core objects ----------
-let r;   // MSAA is a large fixed cost on tablets (4x colour + depth bandwidth, resolve every frame): off by default there (S.aa)
-try { r = new Renderer($('gl'), { quality: S.quality, antialias: !!S.aa }); } catch (e) { $('loading').style.display = 'none'; $('err').style.display = 'flex'; console.error(e); throw e; }
+let r;   // no MSAA (a large fixed cost on tablets): the scene is drawn offscreen at the governor's resolution and resolved to the canvas with FXAA + a light sharpen (S.fxaa)
+try { r = new Renderer($('gl'), { quality: S.quality, outScale: isTouch ? 0.7 : 1, fxaa: S.fxaa !== 0, scale: S.dyn && S.dynQ === S.quality ? S.dyn : isTouch ? 0.7 : 1 }); } catch (e) { $('loading').style.display = 'none'; $('err').style.display = 'flex'; console.error(e); throw e; }
 const world = new World();
 const fx = new FX();
 const sfx = new Sfx();
@@ -613,7 +613,7 @@ function updateHud(dt) {
   hudT = 0.05;
   drawGauge();
   const hp = player.health;
-  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + awakeCount() + ' awake / ' + world.dyn.length + ' loose / ' + world.bodies.length + ' all · ct ' + world.nc + ' · res ' + r.dprScale.toFixed(2) + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
+  fpsEl.textContent = Math.round(1000 / Math.max(fpsAvg, 1)) + ' FPS · phys ' + PF.ph.toFixed(1) + ' upd ' + PF.up.toFixed(1) + ' fx ' + PF.fx.toFixed(1) + ' draw ' + PF.dr.toFixed(1) + ' gl ' + PF.rn.toFixed(1) + ' ms · ' + r.stats.draws + '+' + r.stats.sdraws + 'd ' + Math.round(r.stats.tris / 1000) + 'kt · bodies ' + awakeCount() + ' awake / ' + world.dyn.length + ' loose / ' + world.bodies.length + ' all · ct ' + world.nc + ' · res ' + r.dprScale.toFixed(2) + (scene && scene.land && scene.land.treeField ? ' · leaf-trees ' + scene.land.treeField.nDet : '');
   $('hpfill').style.width = (hp * 100).toFixed(0) + '%';
   $('hpfill').style.background = hp > 0.6 ? '#dfe3e8' : hp > 0.3 ? '#f5c400' : '#e5484d';
   $('cost').innerHTML = '$' + Math.round(player.cost).toLocaleString() + (propDmg > 500 ? '<small style="display:block;font-size:12px;font-weight:600;color:var(--muted)">property $' + Math.round(propDmg).toLocaleString() + '</small>' : '');
@@ -676,7 +676,7 @@ function syncMenu() {
   seg('segTod', 'tod', () => r.setTOD(S.tod));
   seg('segQ', 'quality', applyQuality);
   seg('segFps', 'fps', () => { ctx.load = 1; });
-  seg('segAA', 'aa', () => toast('Reload the page to apply smooth edges setting', ''));
+  seg('segAA', 'fxaa', () => { r.fxaa = S.fxaa !== 0; });
   seg('segU', 'units');
   seg('segTilt', 'tilt', () => { if (S.tilt && window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); });
 }
@@ -750,9 +750,9 @@ function updateLiftCard(u) {
   for (const b of bs) { const i = +b.dataset.i; const on = i === (u.moving ? u.dest : u.cur); b.style.background = on ? '#f5b81c' : '#1d232c'; b.style.color = on ? '#14110a' : '#e8edf3'; b.style.opacity = u.moving && i !== u.dest ? '.5' : '1'; }
   const st = liftEl.querySelector('#liftSt'); if (st) st.textContent = u.moving ? 'Going to ' + u.labels[u.dest] : 'Floor ' + u.labels[u.cur];
 }
-// ---------- the 10 m physics bubble ----------
-// Only things a "watcher" can reach in the next instant are in the physics world: a car is a swept path (where it is -> 10 m ahead along its velocity, 4 m wide),
-// a walking person is a 10 m circle, and anything already moving fast (flying debris, a shoved prop) wakes what lies in its way. Buildings and loose props
+// ---------- the physics bubble: a few metres, scaled by speed ----------
+// Only things a "watcher" can reach in the next instant are in the physics world: a car is a swept path (where it is -> the next 0.15 s along its velocity, at least 2 m, 5 m wide),
+// a walking person is a 2 m circle plus the next quarter second of walking, and anything already moving fast (flying debris, a shoved prop) wakes what lies in its way. Buildings and loose props
 // outside every watcher are only pictures + a few numbers. Waking is done before each physics step, so there is no delay and nothing to bounce off.
 let debrisPts = [];
 function scanMovers() {
@@ -763,7 +763,7 @@ function scanMovers() {
     const sp2 = b.v[0] * b.v[0] + b.v[2] * b.v[2];
     if (sp2 < 4 || b.pos[1] < -5) continue;
     if (b.mass < 25 && b.mass * Math.sqrt(sp2) < 120) continue;                        // a flying brick or plaster flake must not wake a whole house: only heavy pieces (panels, slabs, big lumps) do
-    const k = Math.max(3, Math.sqrt(sp2) * 0.35) / Math.sqrt(sp2);
+    const k = Math.max(2, Math.sqrt(sp2) * 0.2) / Math.sqrt(sp2);
     debrisPts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + b.v[0] * k, z2: b.pos[2] + b.v[2] * k, r: 1.5, own: (b.rub && b.rub.B) || (b.panel && b.panel.B) || null });   // own: the wreck it came from (it must not keep its own wreck awake for ever)
     if (debrisPts.length >= 160) break;
   }
@@ -774,11 +774,11 @@ function wakeWatchers() {
     const b = c.vehicle ? c.vehicle.body : null; if (!b) continue;
     const vx = b.v[0], vz = b.v[2], sp = Math.hypot(vx, vz);
     if (c !== player && sp < 1 && !c.vehicle.hyperOn) continue;                       // parked traffic stays quiet
-    const k = sp > 1.5 ? Math.min(60, Math.max(3, sp * 0.3)) / sp : 0;                 // the next 0.3 s of path (at least 3 m): buildings wake only when the car is really about to reach them
-    pts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + vx * k, z2: b.pos[2] + vz * k, r: 3 });
+    const k = sp > 1 ? Math.min(40, Math.max(2, sp * 0.15)) / sp : 0;                 // the next 0.15 s of path (at least 2 m): buildings wake only when the car is really about to reach them
+    pts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + vx * k, z2: b.pos[2] + vz * k, r: 2.6 });   // 2.6 m = half the diagonal of a car: its nose and corners are inside
     if (c === player) foci.push({ x: b.pos[0], z: b.pos[2], vx, vz });
   }
-  if (person.active) { const q = person.body.pos; pts.push({ x: q[0], z: q[2], x2: q[0], z2: q[2], r: 10 }); foci.push({ x: q[0], z: q[2], vx: person.body.v[0], vz: person.body.v[2] }); }
+  if (person.active) { const q = person.body.pos, pv = person.body.v, ps = Math.hypot(pv[0], pv[2]), pk = ps > 0.5 ? Math.min(8, Math.max(1.5, ps * 0.25)) / ps : 0; pts.push({ x: q[0], z: q[2], x2: q[0] + pv[0] * pk, z2: q[2] + pv[2] * pk, r: 2.2 }); foci.push({ x: q[0], z: q[2], vx: person.body.v[0], vz: person.body.v[2] }); }
   scene.structures.updateDormancy(pts);
   scene.watchProps(pts);
   return foci;

@@ -124,6 +124,7 @@ uniform float uShadowTexel, uShadowOn;
 uniform int uKind;
 uniform vec3 uBase, uEmis;
 uniform float uMetal, uRough, uCoat, uAlpha, uTexOn, uTexScale, uFlake;
+uniform float uPixA;
 uniform highp sampler2D uSoil;   // deformable soil field (toroidal, 0.125 m cells): R = dug depth, G = grass torn off, B = tyre compaction, A = loose spoil heap
 uniform vec4 uSoilO;       // window origin x, z (m), window size (m), 1 = on
 uniform sampler2D uMeta;   // same window: 255 where the ground is deformable lawn (drawn by the terrain patch), 0 elsewhere
@@ -241,6 +242,7 @@ void main(){
   if (!front) N = -N;
   vec3 Vv = normalize(-vPosRel);
   float dist = length(vPosRel);
+  float ddt = dist * clamp(uPixA * 935., 0.85, 2.0);   // detail distance: a coarser pixel (lower resolution, wider lens) loses fine detail earlier instead of shimmering
   vec3 viewDir = -Vv;
   vec3 albedo = uBase * vCol;
   float metal = uMetal, rough = uRough, coat = uCoat;
@@ -278,9 +280,9 @@ void main(){
   }
 
   if (uKind == 4) {
-    float r; albedo = asphalt(vWorldMod * uTexScale, dist, pw * uTexScale, r) * uBase; rough = r; metal = 0.; coat = 0.;
+    float r; albedo = asphalt(vWorldMod * uTexScale, ddt, pw * uTexScale, r) * uBase; rough = r; metal = 0.; coat = 0.;
     if (uTexOn > 0.5) { albedo = mix(albedo, tx.rgb * uBase, tx.a); }
-    float nrr = 1. - smoothstep(8., 38., dist);
+    float nrr = 1. - smoothstep(8., 38., ddt);
     vec2 rp = vWorldMod.xz;
     float w65 = bl(65., pw), w180 = bl(180., pw);
     if (nrr > 0.01 && w65 > 0.01) {
@@ -311,7 +313,7 @@ void main(){
       }
     }
     // tar-sealed hairline cracks in patches (dark, a touch glossier)
-    float cvis = 0., cfd = 1. - smoothstep(10., 60., dist);
+    float cvis = 0., cfd = 1. - smoothstep(10., 60., ddt);
     if (cfd > 0.004) {
       float cm = smoothstep(.58, .72, vn2(rp * 0.045 + 3.)), cw = 0.014 + 0.5 * pw, ck = (1. - smoothstep(0., cw, abs(vn2(rp * 0.42 + 9.) - .5))) * (0.014 / cw);
       cvis = cm * ck * cfd;
@@ -320,13 +322,14 @@ void main(){
   } else if (uKind == 1) {
     // car paint: tinted base with metallic flake + clear coat; decals/panel lines from texture
     float dmg = 1. - vCol.r;
-    albedo = uBase * mix(vCol, vec3(0.16,0.13,0.11), clamp(dmg*1.2,0.,1.));
+    albedo = uBase * mix(vec3(vCol.r * vCol.g, vCol.g, vCol.b), vec3(0.16,0.13,0.11), clamp(dmg*1.2,0.,1.));   // g/b = baked sill occlusion (neutral darkening), r = 1 - damage
     if (uTexOn > 0.5) { albedo = mix(albedo, tx.rgb, tx.a); rough = mix(rough, 0.55, tx.a); coat *= (1.-tx.a); }
     rough = clamp(rough + dmg * 0.5, 0., 1.);
     coat *= (1. - clamp(dmg*1.5, 0., 1.));
     metal = metal * (1. - dmg);
-    float fl = vn2(vLocal.xy*700.+vLocal.z*400.) * vn2(vLocal.zy*600.+7.);
-    albedo *= 1. + (fl-.25) * uFlake * 0.35 * (1.-smoothstep(3.,12.,dist));
+    float ff = 1. - smoothstep(0.0012, 0.0030, dist * uPixA);   // glitter exists only while a pixel is finer than a flake (a pixel wider than that would alias into moire bands)
+    if (ff > 0.004) { float fl = vn2(vLocal.xy*700.+vLocal.z*400.) * vn2(vLocal.zy*600.+7.); albedo *= 1. + (fl-.25) * uFlake * 0.35 * ff; }
+
   } else if (uKind == 2) {
     albedo = uBase; alpha = uAlpha;
   } else if (uKind == 8) {
@@ -339,7 +342,7 @@ void main(){
     // natural ground: soil / grass / dry grass. Patchy at large scale, clods and blades up close, no repeating texture
     vec2 gp = vWorldMod.xz * uTexScale;
     float pwg = pw * uTexScale;
-    float f1 = 1.-smoothstep(40.,260.,dist), f2 = 1.-smoothstep(6.,45.,dist), f3 = 1.-smoothstep(1.5,16.,dist);
+    float f1 = 1.-smoothstep(40.,260.,ddt), f2 = 1.-smoothstep(6.,45.,ddt), f3 = 1.-smoothstep(1.5,16.,ddt);
     // the fine octaves only where their weight is not zero: beyond 16 m / 45 m / 260 m they are not evaluated at all
     float n0 = vn2(gp*0.011), n1 = .5, n2 = .5, n3 = .5, n4 = .5, n5 = .5;
     if (f1 > 0.003) { n1 = vn2(gp*0.07); n2 = vn2(gp*0.45); }
@@ -374,7 +377,7 @@ void main(){
           sc = mix(sc, vec3(0.30, 0.235, 0.15), smoothstep(0.32, 0.4, dd));
           sc *= 0.88 + 0.24 * vn2(gp * 0.35 + 41.);                                                  // patchy: the soil is never one colour
           vec2 lsl; float lh = soilH(gp, pwg, lsl);
-          float nrs = 1. - smoothstep(10., 60., dist);                                               // lumps and grit fade with distance (they average out, no shimmer)
+          float nrs = 1. - smoothstep(10., 60., ddt);                                               // lumps and grit fade with distance (they average out, no shimmer)
           float fresh = smoothstep(0.004, 0.025, mnd);                                               // spoil thrown out of the pit: loose, dark, damp lumps
           float wet = clamp(smoothstep(0.03, 0.2, dep) * 0.75 + fresh * 0.55 + smoothstep(0.1, 0.35, dep) * 0.2, 0., 1.);
           sc *= mix(0.62, 1.38, lh);                                                                 // crevices dark, lump tops light
@@ -396,7 +399,7 @@ void main(){
       }
     }
     // real 3D relief up close (fades out with distance): lawn blades and tufts, soil clods and furrows with damp glossy patches, paver joints
-    float rl = (1. - smoothstep(4., 45., dist)) * (1. - 0.8 * comp);
+    float rl = (1. - smoothstep(4., 45., ddt)) * (1. - 0.8 * comp);
     if (uFlake > 0.5 && rl > 0.01) {
       float h0 = relief(gp, uFlake, pwg), e = 0.004;
       float hx = relief(gp + vec2(e, 0.), uFlake, pwg), hz = relief(gp + vec2(0., e), uFlake, pwg);
@@ -431,7 +434,7 @@ void main(){
     // bark: vertical fissures and ridges, a little darker in the cracks
     vec3 wb = vWorldMod; float bu = (wb.x + wb.z) * 38.;
     float b0 = vn2(vec2(bu, wb.y * 3.2)) * 0.6 + vn2(vec2(bu * 2.3, wb.y * 7.)) * 0.4;
-    float nb = 1. - smoothstep(6., 50., dist);
+    float nb = 1. - smoothstep(6., 50., ddt);
     albedo = uBase * vCol * (0.7 + 0.6 * b0 * (0.4 + 0.6 * nb) + 0.3 * (1. - nb) * 0.5);
     vec3 tB = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
     float bx = vn2(vec2(bu + 0.02 * 38., wb.y * 3.2)) * 0.6 + vn2(vec2((bu + 0.02 * 38.) * 2.3, wb.y * 7.)) * 0.4;
@@ -443,7 +446,7 @@ void main(){
     N = normalize(vNrm);
     vec3 wl = vWorldMod;
     float lf = vn2(wl.xz * 7. + wl.y * 5.) * 0.6 + vn2(wl.xy * 15. + wl.z * 9.) * 0.4;
-    float nl = 1. - smoothstep(10., 70., dist);
+    float nl = 1. - smoothstep(10., 70., ddt);
     vec3 tint = vCol;
     if (uKind == 11) tint = vec3(1.0 * (0.88 + 0.24 * fract(sin(dot(vCol.xy, vec2(12.9898, 78.233))) * 43758.5453)));   // pictures: painted shading is already in the texture, only a per-tree brightness varies
     albedo = tx.rgb * uBase * tint * (1. + (lf - .5) * 0.3 * nl);
@@ -502,7 +505,7 @@ void main(){
     else if (cell.x == 3. && cell.y == 2.) {
       // clean modern finish (painted white / smooth render): satin, almost no bump, no grime streaks, only a very faint tonal breath
       rough = 0.35;
-      float nr2 = 1. - smoothstep(4., 28., dist);
+      float nr2 = 1. - smoothstep(4., 28., ddt);
       vec3 wp2 = vWorldMod;
       vec2 sp2 = abs(vNrm.y) > 0.7 ? wp2.xz : vec2(wp2.x * abs(vNrm.z) + wp2.z * abs(vNrm.x), wp2.y);
       float h1 = vn2(sp2 * 46.);
@@ -516,7 +519,7 @@ void main(){
       // weathering streaks at mid range, so a wall never looks like a flat colour fill.
       vec3 wp = vWorldMod;
       vec2 sp = abs(vNrm.y) > 0.7 ? wp.xz : vec2(wp.x * abs(vNrm.z) + wp.z * abs(vNrm.x), wp.y);
-      float nr = 1. - smoothstep(4., 28., dist), md = 1. - smoothstep(25., 130., dist);
+      float nr = 1. - smoothstep(4., 28., ddt), md = 1. - smoothstep(25., 130., ddt);
       float wad = 0.;
       // each layer only where it is visible: grain and roughcast bumps inside 28 m, blotches and streaks inside 130 m (the noise is not even evaluated outside)
       if (md > 0.004) {
@@ -578,7 +581,7 @@ void main(){
 
   if (uKind == 1 && coat > 0.0) {
     float cf = 0.04 + 0.96 * pow(1.-NdV, 5.);
-    vec3 cenv = skyEnv(R, 0.03);
+    vec3 cenv = skyEnv(R, 0.11);   // a mirror-sharp horizon line bends with every triangle of the body mesh (wavy bands); a little blur keeps it a smooth curve
     vec3 cH = H;
     float cs = ggxD(NdH, 0.045) * smithV(max(NdL,1e-3), NdV, 0.045) * cf * NdL * sh;
     col = col * (1. - cf*coat) + (cenv * cf * so + uSunCol * cs * 3.) * coat;
@@ -927,4 +930,55 @@ void main(){
   vec3 col = vCol * (uSunCol * (ndl * 0.8 + 0.2) * sh / 3.14159 * 3.0 + amb * 0.95) + vCol * vec3(0.8, 0.78, 0.2) * uSunCol * back * sh * 0.5;
   col = fogApply(col, dist, -Vv);
   outCol = vec4(finish(col), 1.);
+}`;
+
+// ---------- resolve pass: the scene is rendered into an offscreen texture at the governor's resolution, then drawn to the screen here.
+// FXAA (edge-only: flat areas and textures are left alone) + a light sharpen that wins back the crispness lost in upscaling. uReg = used part of the texture (w/alloc), uPx = 1 texel.
+export const VS_POST = /* glsl */ `#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+export const FS_POST = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform vec2 uReg;
+uniform vec2 uPx;
+uniform float uAA;
+uniform float uSharp;
+out vec4 oColor;
+float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main() {
+  vec2 lo = uPx * 0.5, hi = uReg - uPx * 0.5;
+  vec2 uv = clamp(vUv * uReg, lo, hi);
+  vec3 cM = texture(uScene, uv).rgb;
+  if (uAA < 0.5 && uSharp < 0.001) { oColor = vec4(cM, 1.0); return; }
+  vec3 cNW = texture(uScene, clamp(uv + vec2(-1.0, -1.0) * uPx, lo, hi)).rgb;
+  vec3 cNE = texture(uScene, clamp(uv + vec2( 1.0, -1.0) * uPx, lo, hi)).rgb;
+  vec3 cSW = texture(uScene, clamp(uv + vec2(-1.0,  1.0) * uPx, lo, hi)).rgb;
+  vec3 cSE = texture(uScene, clamp(uv + vec2( 1.0,  1.0) * uPx, lo, hi)).rgb;
+  float lM = lum(cM), lNW = lum(cNW), lNE = lum(cNE), lSW = lum(cSW), lSE = lum(cSE);
+  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+  float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+  float rng = lMax - lMin;
+  if (uAA > 0.5 && rng >= max(0.0312, lMax * 0.125)) {
+    vec2 dir;
+    dir.x = -((lNW + lNE) - (lSW + lSE));
+    dir.y =  ((lNW + lSW) - (lNE + lSE));
+    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * uPx;
+    vec3 rgbA = 0.5 * (texture(uScene, clamp(uv + dir * (1.0 / 3.0 - 0.5), lo, hi)).rgb + texture(uScene, clamp(uv + dir * (2.0 / 3.0 - 0.5), lo, hi)).rgb);
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(uScene, clamp(uv - dir * 0.5, lo, hi)).rgb + texture(uScene, clamp(uv + dir * 0.5, lo, hi)).rgb);
+    float lB = lum(rgbB);
+    oColor = vec4((lB < lMin || lB > lMax) ? rgbA : rgbB, 1.0);
+    return;
+  }
+  // flat area / texture: a light unsharp mask against the four diagonal neighbours, clamped to their range so it can never ring
+  vec3 avg = 0.25 * (cNW + cNE + cSW + cSE);
+  vec3 mn = min(cM, min(min(cNW, cNE), min(cSW, cSE))), mx = max(cM, max(max(cNW, cNE), max(cSW, cSE)));
+  oColor = vec4(clamp(cM + (cM - avg) * uSharp, mn, mx), 1.0);
 }`;
