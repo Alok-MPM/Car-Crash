@@ -743,12 +743,12 @@ export class Structures {
     for (const L of B.lifts) {
       const M = this.liftMeshes(L.style), st = L.st, wx = B.x + L.cx, wz = B.z + L.zc;
       m4.fromTRS(this._lM[0], [wx, L.y, wz], [0, 0, 0, 1], 1);
-      r.add(M.cabin, this._lM[0], { cast: false });
+      r.add(M.cabin, this._lM[0], { cast: false, dyn: L.state === 'moving' });
       if (d - B.radius < 25) r.addLight(wx, L.y + st.h - 0.15, wz, 7, st.light[0] * 1.2, st.light[1] * 1.2, st.light[2] * 1.2);
       const open = L.state === 'moving' ? 0 : L.door, dw = st.dw;
       const place = (y, z, o) => {
         const xs = st.door === 'centre' ? [wx - dw / 4 - o * dw / 2, wx + dw / 4 + o * dw / 2] : [wx - dw / 4 + o * dw * 0.9, wx + dw / 4 + o * dw * 0.45];
-        for (let i = 0; i < 2; i++) { m4.fromTRS(this._lM[1], [xs[i], y, z], [0, 0, 0, 1], 1); r.add(M.leaf, this._lM[1], { cast: false }); }
+        for (let i = 0; i < 2; i++) { m4.fromTRS(this._lM[1], [xs[i], y, z], [0, 0, 0, 1], 1); r.add(M.leaf, this._lM[1], { cast: false, dyn: true }); }
       };
       place(L.y, wz + st.d / 2 - 0.05, open);                                         // cabin doors
       L.levels.forEach((lv, k) => { if (Math.abs(lv - cam[1]) > 40) return; place(lv, B.z + L.doorZ - 0.1, k === L.cur && L.state !== 'moving' ? L.door : 0); });   // landing doors
@@ -1101,12 +1101,12 @@ export class Structures {
         if (!it.mesh) it.mesh = this.furnMesh(it);
         if (!it._m) it._m = new Float32Array(16);
         m4.fromTRS(it._m, fb.pos, fb.q, 1);
-        r.add(it.mesh, it._m, { cast: false });
+        r.add(it.mesh, it._m, { cast: false, dyn: fb.moving() });
       }
       for (const P of B.free) {
         const b = P.body;
         m4.fromTRS(P._m, b.pos, b.q, 1);
-        r.add(P.mesh, P._m, { cast: d - B.radius < 90 });
+        r.add(P.mesh, P._m, { cast: d - B.radius < 90, dyn: b.moving() });
       }
     }
   }

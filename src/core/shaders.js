@@ -242,7 +242,7 @@ void main(){
   if (!front) N = -N;
   vec3 Vv = normalize(-vPosRel);
   float dist = length(vPosRel);
-  float ddt = dist * clamp(uPixA * 935., 0.85, 2.0);   // detail distance: a coarser pixel (lower resolution, wider lens) loses fine detail earlier instead of shimmering
+  float ddt = dist * clamp(uPixA * 935., 0.85, 1.35);   // detail distance: a coarser pixel (lower resolution, wider lens) loses fine detail earlier instead of shimmering
   vec3 viewDir = -Vv;
   vec3 albedo = uBase * vCol;
   float metal = uMetal, rough = uRough, coat = uCoat;
@@ -941,6 +941,35 @@ void main() {
   vUv = p;
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
+// ---- shared by the plain resolve and the TAA fallback: FXAA-lite on edges, a light unsharp mask elsewhere
+const FXAA_LITE = /* glsl */ `
+float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+vec3 fxaaLite(sampler2D tex, vec2 uv, vec2 lo, vec2 hi, vec2 px, float doAA, float sharp) {
+  vec3 cM = texture(tex, uv).rgb;
+  vec3 cNW = texture(tex, clamp(uv + vec2(-1.0, -1.0) * px, lo, hi)).rgb;
+  vec3 cNE = texture(tex, clamp(uv + vec2( 1.0, -1.0) * px, lo, hi)).rgb;
+  vec3 cSW = texture(tex, clamp(uv + vec2(-1.0,  1.0) * px, lo, hi)).rgb;
+  vec3 cSE = texture(tex, clamp(uv + vec2( 1.0,  1.0) * px, lo, hi)).rgb;
+  float lM = lum(cM), lNW = lum(cNW), lNE = lum(cNE), lSW = lum(cSW), lSE = lum(cSE);
+  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+  float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+  float rng = lMax - lMin;
+  if (doAA > 0.5 && rng >= max(0.0312, lMax * 0.125)) {
+    vec2 dir;
+    dir.x = -((lNW + lNE) - (lSW + lSE));
+    dir.y =  ((lNW + lSW) - (lNE + lSE));
+    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * px;
+    vec3 rgbA = 0.5 * (texture(tex, clamp(uv + dir * (1.0 / 3.0 - 0.5), lo, hi)).rgb + texture(tex, clamp(uv + dir * (2.0 / 3.0 - 0.5), lo, hi)).rgb);
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(tex, clamp(uv - dir * 0.5, lo, hi)).rgb + texture(tex, clamp(uv + dir * 0.5, lo, hi)).rgb);
+    float lB = lum(rgbB);
+    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
+  }
+  vec3 avg = 0.25 * (cNW + cNE + cSW + cSE);
+  vec3 mn = min(cM, min(min(cNW, cNE), min(cSW, cSE))), mx = max(cM, max(max(cNW, cNE), max(cSW, cSE)));
+  return clamp(cM + (cM - avg) * sharp, mn, mx);
+}`;
 export const FS_POST = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -950,35 +979,98 @@ uniform vec2 uPx;
 uniform float uAA;
 uniform float uSharp;
 out vec4 oColor;
-float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+${FXAA_LITE}
 void main() {
   vec2 lo = uPx * 0.5, hi = uReg - uPx * 0.5;
   vec2 uv = clamp(vUv * uReg, lo, hi);
-  vec3 cM = texture(uScene, uv).rgb;
-  if (uAA < 0.5 && uSharp < 0.001) { oColor = vec4(cM, 1.0); return; }
-  vec3 cNW = texture(uScene, clamp(uv + vec2(-1.0, -1.0) * uPx, lo, hi)).rgb;
-  vec3 cNE = texture(uScene, clamp(uv + vec2( 1.0, -1.0) * uPx, lo, hi)).rgb;
-  vec3 cSW = texture(uScene, clamp(uv + vec2(-1.0,  1.0) * uPx, lo, hi)).rgb;
-  vec3 cSE = texture(uScene, clamp(uv + vec2( 1.0,  1.0) * uPx, lo, hi)).rgb;
-  float lM = lum(cM), lNW = lum(cNW), lNE = lum(cNE), lSW = lum(cSW), lSE = lum(cSE);
-  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
-  float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
-  float rng = lMax - lMin;
-  if (uAA > 0.5 && rng >= max(0.0312, lMax * 0.125)) {
-    vec2 dir;
-    dir.x = -((lNW + lNE) - (lSW + lSE));
-    dir.y =  ((lNW + lSW) - (lNE + lSE));
-    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
-    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
-    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * uPx;
-    vec3 rgbA = 0.5 * (texture(uScene, clamp(uv + dir * (1.0 / 3.0 - 0.5), lo, hi)).rgb + texture(uScene, clamp(uv + dir * (2.0 / 3.0 - 0.5), lo, hi)).rgb);
-    vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(uScene, clamp(uv - dir * 0.5, lo, hi)).rgb + texture(uScene, clamp(uv + dir * 0.5, lo, hi)).rgb);
-    float lB = lum(rgbB);
-    oColor = vec4((lB < lMin || lB > lMax) ? rgbA : rgbB, 1.0);
+  if (uAA < 0.5 && uSharp < 0.001) { oColor = vec4(texture(uScene, uv).rgb, 1.0); return; }
+  oColor = vec4(fxaaLite(uScene, uv, lo, hi, uPx, uAA, uSharp), 1.0);
+}`;
+
+// ---- temporal anti-aliasing + upscale. The scene is drawn at the governor's (lower) resolution with a sub-pixel jitter that cycles through 8 positions; every output pixel
+// rebuilds its colour from the nearby low-res samples (each at its true, un-jittered position), then blends the previous output (reprojected through the depth buffer and
+// the camera motion) into it. A static surface therefore keeps collecting new sub-pixel samples: edges stop crawling and the picture is sharper than one low-res frame can be.
+// The history is clamped to the colour range of the current neighbourhood (so changed content never ghosts), and pixels whose scene alpha is 0 (moving cars, debris, smoke)
+// skip the history entirely and take the FXAA-lite path.
+export const FS_TAA = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform sampler2D uHist;
+uniform vec2 uSize;      // scene region in pixels
+uniform vec2 uReg;       // region / allocation (bilinear fallback)
+uniform vec2 uPx;        // 1 / allocation
+uniform vec2 uJit;       // this frame's jitter in scene pixels
+uniform mat4 uReproj;    // previous clip <- current NDC (homogeneous)
+uniform vec2 uOutPx;     // 1 / output size
+uniform float uHistW;    // history weight, 0 = none (first frame / camera cut)
+out vec4 oColor;
+${FXAA_LITE}
+vec3 histCR(vec2 uv) {   // Catmull-Rom through five bilinear taps: keeps the accumulated picture sharp while it is resampled
+  vec2 sz = 1.0 / uOutPx, pos = uv * sz, c = floor(pos - 0.5) + 0.5, f = pos - c;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+  vec2 w3 = f * f * (-0.5 + 0.5 * f);
+  vec2 w12 = w1 + w2, o12 = w2 / w12;
+  vec2 t0 = (c - 1.0) * uOutPx, t3 = (c + 2.0) * uOutPx, t12 = (c + o12) * uOutPx;
+  float a0 = w12.x * w0.y, a1 = w0.x * w12.y, a2 = w12.x * w12.y, a3 = w3.x * w12.y, a4 = w12.x * w3.y;
+  vec3 r = texture(uHist, vec2(t12.x, t0.y)).rgb * a0 + texture(uHist, vec2(t0.x, t12.y)).rgb * a1 + texture(uHist, vec2(t12.x, t12.y)).rgb * a2
+         + texture(uHist, vec2(t3.x, t12.y)).rgb * a3 + texture(uHist, vec2(t12.x, t3.y)).rgb * a4;
+  return max(r / (a0 + a1 + a2 + a3 + a4), 0.0);
+}
+void main() {
+  vec2 sp = vUv * uSize;
+  ivec2 hi = ivec2(uSize) - 1;
+  ivec2 c0 = clamp(ivec2(floor(sp)), ivec2(0), hi);
+  vec3 acc = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), mn = vec3(9.0), mx = vec3(-9.0);
+  float ws = 0.0, aMin = 1.0;
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    ivec2 t = clamp(c0 + ivec2(i, j), ivec2(0), hi);
+    vec4 s = texelFetch(uScene, t, 0);
+    vec2 d = vec2(t) + 0.5 - uJit - sp;            // where the sample really is, minus where this output pixel is (scene pixels)
+    float w = exp(-2.29 * dot(d, d));
+    acc += s.rgb * w; ws += w;
+    m1 += s.rgb; m2 += s.rgb * s.rgb; mn = min(mn, s.rgb); mx = max(mx, s.rgb); aMin = min(aMin, s.a);
+  }
+  vec3 cur = acc / ws;
+  if (aMin < 0.5) {                                 // something moving here: no history, spatial AA only
+    vec2 lo = uPx * 0.5, hiuv = uReg - uPx * 0.5;
+    oColor = vec4(fxaaLite(uScene, clamp(vUv * uReg, lo, hiuv), lo, hiuv, uPx, 1.0, 0.0), 1.0);
     return;
   }
-  // flat area / texture: a light unsharp mask against the four diagonal neighbours, clamped to their range so it can never ring
-  vec3 avg = 0.25 * (cNW + cNE + cSW + cSE);
-  vec3 mn = min(cM, min(min(cNW, cNE), min(cSW, cSE))), mx = max(cM, max(max(cNW, cNE), max(cSW, cSE)));
-  oColor = vec4(clamp(cM + (cM - avg) * uSharp, mn, mx), 1.0);
+  float k = 0.0;
+  vec3 h = cur;
+  if (uHistW > 0.0) {
+    float d = texelFetch(uDepth, c0, 0).r;
+    vec2 tp = (vec2(c0) + 0.5 - uJit) / uSize;      // true position of the nearest sample
+    vec4 pc = uReproj * vec4(tp * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    vec2 huv = vUv + (pc.xy / pc.w * 0.5 + 0.5 - tp);
+    if (pc.w > 0.0 && huv.x > 0.002 && huv.y > 0.002 && huv.x < 0.998 && huv.y < 0.998) {
+      h = histCR(huv);
+      vec3 mu = m1 * (1.0 / 9.0), sg = sqrt(max(m2 * (1.0 / 9.0) - mu * mu, 0.0));
+      vec3 bl = max(mn, mu - 1.5 * sg), bh = min(mx, mu + 1.5 * sg);
+      h = clamp(h, min(bl, bh), max(bl, bh));
+      k = uHistW;
+    }
+  }
+  oColor = vec4(mix(cur, h, k), 1.0);
+}`;
+
+// accumulated picture -> canvas with a light sharpen (clamped to the neighbours so it never rings)
+export const FS_PRESENT = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uHist;
+uniform vec2 uOutPx;
+uniform float uSharp;
+out vec4 oColor;
+void main() {
+  vec3 c = texture(uHist, vUv).rgb;
+  if (uSharp < 0.001) { oColor = vec4(c, 1.0); return; }
+  vec3 n = texture(uHist, vUv + vec2(0.0, uOutPx.y)).rgb, s = texture(uHist, vUv - vec2(0.0, uOutPx.y)).rgb;
+  vec3 e = texture(uHist, vUv + vec2(uOutPx.x, 0.0)).rgb, w = texture(uHist, vUv - vec2(uOutPx.x, 0.0)).rgb;
+  vec3 mn = min(c, min(min(n, s), min(e, w))), mx = max(c, max(max(n, s), max(e, w)));
+  oColor = vec4(clamp(c + (c - 0.25 * (n + s + e + w)) * uSharp, mn, mx), 1.0);
 }`;

@@ -410,7 +410,7 @@ export class Scene {
       const d2 = dx * dx + dz * dz;
       if (d2 > 520 * 520) continue;
       m4.fromTRS(p.m, b.pos, b.q, 1);
-      r.add(p.mesh, p.m, { cast: d2 < 110 * 110 });
+      r.add(p.mesh, p.m, { cast: d2 < 110 * 110, dyn: b.moving() });
     }
   }
   _rampModel(rp) {

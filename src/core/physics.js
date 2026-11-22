@@ -199,6 +199,40 @@ export class Body {
     this.v[0] = this.v[1] = this.v[2] = 0;
     this.w[0] = this.w[1] = this.w[2] = 0;
   }
+  // ---- render interpolation. Physics runs at a fixed 120 Hz, the screen at whatever the GPU manages; without this the picture advances by 1, 2 or 3 steps from one frame to the next
+  // and a moving world judders. keepPrev() notes the pose before a step, blendPose(a) shows the pose a step-fraction (0..1) between that and the current one, unblend() puts the real pose back.
+  keepPrev(n) {
+    let p = this.pp;
+    if (!p) { p = this.pp = [0, 0, 0, 0, 0, 0, 0]; this.rs = new Array(16).fill(0); }
+    const o = this.pos, q = this.q;
+    p[0] = o[0]; p[1] = o[1]; p[2] = o[2]; p[3] = q[0]; p[4] = q[1]; p[5] = q[2]; p[6] = q[3];
+    this.ppN = n;
+  }
+  blendPose(a) {
+    const p = this.pp, o = this.pos, q = this.q, s = this.rs, R = this.R;
+    const dx = o[0] - p[0], dy = o[1] - p[1], dz = o[2] - p[2];
+    if (dx * dx + dy * dy + dz * dz > 16) return false;         // teleported (reset, respawn): no sweep across the map
+    s[0] = o[0]; s[1] = o[1]; s[2] = o[2]; s[3] = q[0]; s[4] = q[1]; s[5] = q[2]; s[6] = q[3];
+    for (let i = 0; i < 9; i++) s[7 + i] = R[i];
+    o[0] = p[0] + dx * a; o[1] = p[1] + dy * a; o[2] = p[2] + dz * a;
+    const sg = p[3] * q[0] + p[4] * q[1] + p[5] * q[2] + p[6] * q[3] < 0 ? -a : a, b = 1 - a;
+    const x = p[3] * b + q[0] * sg, y = p[4] * b + q[1] * sg, z = p[5] * b + q[2] * sg, w = p[6] * b + q[3] * sg;
+    const il = 1 / (Math.hypot(x, y, z, w) || 1);
+    q[0] = x * il; q[1] = y * il; q[2] = z * il; q[3] = w * il;
+    quatAxes(q, R);
+    return true;
+  }
+  unblend() {
+    const s = this.rs, o = this.pos, q = this.q, R = this.R;
+    o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; q[0] = s[3]; q[1] = s[4]; q[2] = s[5]; q[3] = s[6];
+    for (let i = 0; i < 9; i++) R[i] = s[7 + i];
+  }
+  // true while the body visibly moves (the renderer keeps such bodies out of temporal anti-aliasing, whose history would smear them)
+  moving() {
+    if (this.fixed || this.sleeping) return false;
+    const v = this.v, w = this.w;
+    return v[0] * v[0] + v[1] * v[1] + v[2] * v[2] > 0.0016 || w[0] * w[0] + w[1] * w[1] + w[2] * w[2] > 0.0016;
+  }
   // local helpers
   toWorld(p) {
     return qRot(this.q, p).map((v, i) => v + this.pos[i]);

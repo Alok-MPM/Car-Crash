@@ -47,6 +47,8 @@ export class Renderer {
     this.dprScale = opts.scale ?? 1;       // scene resolution relative to the screen's native pixels (the governor moves it; the canvas itself never changes size because of it)
     this.outScale = opts.outScale ?? 1;   // canvas resolution relative to native pixels
     this.fxaa = opts.fxaa !== false; this.sharpen = 0.35;
+    this.taa = opts.taa !== false;         // temporal AA + upscale (used while `fxaa` is on); false falls back to the plain FXAA resolve
+    this.frameNo = 0; this.jit = [0, 0]; this.histOk = false;
     this.progs = {
       main: program(gl, S.VS_MAIN, S.FS_MAIN),
       shadow: program(gl, S.VS_SHADOW, S.FS_SHADOW),
@@ -56,6 +58,8 @@ export class Renderer {
       decal: program(gl, S.VS_DECAL, S.FS_DECAL),
       grass: program(gl, S.VS_GRASS, S.FS_GRASS),
       post: program(gl, S.VS_POST, S.FS_POST),
+      taa: program(gl, S.VS_POST, S.FS_TAA),
+      present: program(gl, S.VS_POST, S.FS_PRESENT),
     };
     this.grassMesh = this._makeGrassMesh(8); this.grassMeshFar = this._makeGrassMesh(5); this.grassMeshTri = this._makeGrassMesh(8, true);
     this.grassCfg = null;
@@ -63,6 +67,7 @@ export class Renderer {
     this.emptyVAO = gl.createVertexArray();
     this.setShadowSize(this.quality >= 2 ? 2048 : this.quality === 1 ? 1024 : 0);
     this.view = m4.create(); this.proj = m4.create(); this.vp = m4.create(); this.invVP = m4.create();
+    this.projU = m4.create(); this.vpU = m4.create(); this.invVPU = m4.create(); this.prevVPU = m4.create(); this.prevEye = [0, 0, 0]; this.reproj = m4.create(); this._T = m4.create(); this._tmp = m4.create();
     this.lightVP = m4.create();
     this.eye = [0, 2, 0];
     this.items = [];
@@ -122,23 +127,43 @@ export class Renderer {
     // grow-only allocation: scaling down just uses a corner of it
     if (!this.sceneTex || sw > this.allocW || sh > this.allocH) {
       const aw = Math.max(sw, this.allocW || 0), ah = Math.max(sh, this.allocH || 0);
-      if (this.sceneTex) { gl.deleteTexture(this.sceneTex); gl.deleteRenderbuffer(this.sceneDepth); gl.deleteFramebuffer(this.sceneFB); }
+      if (this.sceneTex) { gl.deleteTexture(this.sceneTex); gl.deleteTexture(this.sceneDepth); gl.deleteFramebuffer(this.sceneFB); }
       this.sceneTex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, this.sceneTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, aw, ah, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      this.sceneDepth = gl.createRenderbuffer();
-      gl.bindRenderbuffer(gl.RENDERBUFFER, this.sceneDepth);
-      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, aw, ah);
+      // depth is a texture too: the TAA resolve reads it to find where every surface was in the previous frame
+      this.sceneDepth = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.sceneDepth);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, aw, ah);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       this.sceneFB = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFB);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.sceneTex, 0);
-      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.sceneDepth);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.sceneDepth, 0);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       this.allocW = aw; this.allocH = ah;
     }
     this.w = sw; this.h = sh;
+    // TAA history: two canvas-sized textures (ping-pong)
+    if (!this.hist || this.histW !== ow || this.histH !== oh) {
+      if (this.hist) for (const h of this.hist) { gl.deleteTexture(h.tex); gl.deleteFramebuffer(h.fb); }
+      this.hist = [0, 1].map(() => {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, ow, oh);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        return { tex, fb };
+      });
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this.histW = ow; this.histH = oh; this.histCur = 0; this.histOk = false;
+    }
   }
 
   setTOD(name) {
@@ -238,6 +263,14 @@ export class Renderer {
     this.eye = cam.eye;
     const aspect = this.w / this.h;
     m4.perspective(this.proj, cam.fov * Math.PI / 180, aspect, cam.near || 0.2, cam.far || 9000);
+    this.projU.set(this.proj);
+    // TAA: shift the whole picture by a sub-pixel amount that cycles (Halton 2,3, 8 positions); the resolve undoes the shift when it rebuilds each pixel
+    const useT = this.fxaa && this.taa;
+    if (useT) {
+      const i = (this.frameNo++ & 7) + 1, hal = (n, b) => { let f = 1, r = 0; while (n > 0) { f /= b; r += f * (n % b); n = Math.floor(n / b); } return r; };
+      this.jit[0] = hal(i, 2) - 0.5; this.jit[1] = hal(i, 3) - 0.5;
+      this.proj[8] = -2 * this.jit[0] / this.w; this.proj[9] = -2 * this.jit[1] / this.h;
+    } else { this.jit[0] = this.jit[1] = 0; this.histOk = false; }
     // rotation-only view: eye at origin, look along (target - eye)
     const f = [cam.target[0] - cam.eye[0], cam.target[1] - cam.eye[1], cam.target[2] - cam.eye[2]];
     m4.lookAt(this.view, [0, 0, 0], f, cam.up || [0, 1, 0]);
@@ -248,12 +281,13 @@ export class Renderer {
     }
     m4.mul(this.vp, this.proj, this.view);
     m4.invert(this.invVP, this.vp);
+    if (useT) { m4.mul(this.vpU, this.projU, this.view); m4.invert(this.invVPU, this.vpU); }
     this.items.length = 0;
     this.lights.length = 0;
     this.eyeMod = [((cam.eye[0] % 512) + 512) % 512, ((cam.eye[1] % 512) + 512) % 512, ((cam.eye[2] % 512) + 512) % 512];
   }
   // model: Float32Array(16) in WORLD space (not camera relative); opts: {cast:true}
-  add(mesh, model, opts) { this.items.push({ mesh, model: Float32Array.from(model), cast: !opts || opts.cast !== false, over: opts && opts.over, only: opts && opts.only, hide: opts && opts.hide }); }
+  add(mesh, model, opts) { this.items.push({ mesh, model: Float32Array.from(model), cast: !opts || opts.cast !== false, over: opts && opts.over, only: opts && opts.only, hide: opts && opts.hide, dyn: !!(opts && opts.dyn) }); }
   addLight(x, y, z, radius, r, g, b, dx = 0, dy = 0, dz = 0, cone = -2) {
     if (this.lights.length < 4) this.lights.push({ p: [x, y, z], r: radius, c: [r, g, b], d: [dx, dy, dz], cone });
   }
@@ -407,6 +441,7 @@ export class Renderer {
       const l = Math.hypot(a, b2, c2) || 1; PL[k * 4] = a / l; PL[k * 4 + 1] = b2 / l; PL[k * 4 + 2] = c2 / l; PL[k * 4 + 3] = d2 / l;
     }
     this.stats.culled = 0;
+    let dynB = false;   // scene alpha is the TAA "moving" mask: 1 (cleared) where the picture is static, written 0 by anything that moves
     for (const it of this.items) {
       {
         const m = it.model, cx = m[12] - camPos[0], cy = m[13] - camPos[1], cz = m[14] - camPos[2];
@@ -417,6 +452,7 @@ export class Renderer {
         if (vis) { const dd = Math.hypot(cx, cy, cz) - rr; if (dd > (it.far || 140 + 110 * rr)) vis = false; }
         if (!vis) { this.stats.culled++; continue; }
       }
+      if (it.dyn !== dynB) { dynB = it.dyn; if (dynB) { gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.ONE, gl.ZERO, gl.ZERO, gl.ZERO); } else gl.disable(gl.BLEND); }
       this._relModel(it.model, rel);
       gl.uniformMatrix4fv(u.uModel, false, rel);
       gl.bindVertexArray(it.mesh.vao);
@@ -438,6 +474,7 @@ export class Renderer {
       }
       if (rm) { this._setMat(u, rm); gl.drawElements(gl.TRIANGLES, re - rs, gl.UNSIGNED_INT, rs * 4); this.stats.draws++; this.stats.tris += (re - rs) / 3; }
     }
+    if (dynB) gl.disable(gl.BLEND);
     // real grass (instanced tufts rooted in the soil field)
     this._drawGrass();
     // decals (skid marks, contact blobs)
@@ -447,9 +484,11 @@ export class Renderer {
       this._mc = null;
       trans.sort((a, b) => b.d - a.d);
       gl.useProgram(P.p);
-      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.enable(gl.BLEND);
       gl.depthMask(false);
+      let tDyn = null;
       for (const t of trans) {
+        if (t.it.dyn !== tDyn) { tDyn = t.it.dyn; gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, tDyn ? gl.ZERO : gl.ONE); }   // glass keeps the mask of what it is on
         this._relModel(t.it.model, rel);
         gl.uniformMatrix4fv(u.uModel, false, rel);
         gl.bindVertexArray(t.it.mesh.vao);
@@ -465,25 +504,64 @@ export class Renderer {
     this._resolve();
   }
 
-  // scene texture -> canvas: FXAA on edges, light sharpen elsewhere
+  // scene texture -> canvas. With TAA: rebuild every pixel from the jittered low-res samples + the reprojected history, then present with a light sharpen.
+  // Without: FXAA on edges, light sharpen elsewhere.
   _resolve() {
-    const gl = this.gl, P = this.progs.post, u = P.u;
-    if (gl.invalidateFramebuffer) gl.invalidateFramebuffer(gl.FRAMEBUFFER, [gl.DEPTH_ATTACHMENT]);   // tile GPUs need not write the depth back
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.outW, this.outH);
+    const gl = this.gl;
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND); gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.depthMask(false);
-    gl.useProgram(P.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.sceneTex);
-    gl.uniform1i(u.uScene, 0);
-    gl.uniform2f(u.uReg, this.w / this.allocW, this.h / this.allocH);
-    gl.uniform2f(u.uPx, 1 / this.allocW, 1 / this.allocH);
-    gl.uniform1f(u.uAA, this.fxaa ? 1 : 0);
-    // upscaling softens the picture: the lower the scene resolution compared with the canvas, the more it is sharpened back
-    const up = this.outW / this.w;
-    gl.uniform1f(u.uSharp, this.sharpen * Math.min(1, Math.max(0, (up - 1) * 2.5)));
     gl.bindVertexArray(this.emptyVAO);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const up = this.outW / this.w;
+    const sharp = this.sharpen * Math.min(1, Math.max(0, (up - 1) * 2.5));   // upscaling softens the picture: the lower the scene resolution compared with the canvas, the more it is sharpened back
+    if (this.fxaa && this.taa && this.hist) {
+      const H = this.hist, cur = this.histCur, prev = cur ^ 1;
+      // previous clip <- current NDC: prevVP * translate(eye - prevEye) * inverse(current VP)   (the view has no translation, positions are eye relative)
+      const T = this._T; m4.ident(T);
+      T[12] = this.eye[0] - this.prevEye[0]; T[13] = this.eye[1] - this.prevEye[1]; T[14] = this.eye[2] - this.prevEye[2];
+      m4.mul(this._tmp, T, this.invVPU); m4.mul(this.reproj, this.prevVPU, this._tmp);
+      let k = this.histOk ? 0.9 : 0;
+      if (Math.abs(T[12]) + Math.abs(T[13]) + Math.abs(T[14]) > 60) k = 0;   // teleport / camera cut
+      const P = this.progs.taa, u = P.u;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, H[cur].fb);
+      gl.viewport(0, 0, this.outW, this.outH);
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.sceneTex); gl.uniform1i(u.uScene, 0);
+      gl.activeTexture(gl.TEXTURE0 + 1); gl.bindTexture(gl.TEXTURE_2D, this.sceneDepth); gl.uniform1i(u.uDepth, 1);
+      gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, H[prev].tex); gl.uniform1i(u.uHist, 2);
+      gl.uniform2f(u.uSize, this.w, this.h);
+      gl.uniform2f(u.uReg, this.w / this.allocW, this.h / this.allocH);
+      gl.uniform2f(u.uPx, 1 / this.allocW, 1 / this.allocH);
+      gl.uniform2f(u.uJit, this.jit[0], this.jit[1]);
+      gl.uniformMatrix4fv(u.uReproj, false, this.reproj);
+      gl.uniform2f(u.uOutPx, 1 / this.outW, 1 / this.outH);
+      gl.uniform1f(u.uHistW, k);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      // the accumulated picture goes to the canvas
+      const Q = this.progs.present, uq = Q.u;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.outW, this.outH);
+      gl.useProgram(Q.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, H[cur].tex); gl.uniform1i(uq.uHist, 0);
+      gl.uniform2f(uq.uOutPx, 1 / this.outW, 1 / this.outH);
+      gl.uniform1f(uq.uSharp, sharp * 0.6);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      this.histCur = prev; this.histOk = true;
+      this.prevVPU.set(this.vpU); this.prevEye[0] = this.eye[0]; this.prevEye[1] = this.eye[1]; this.prevEye[2] = this.eye[2];
+      gl.activeTexture(gl.TEXTURE0);
+    } else {
+      if (gl.invalidateFramebuffer) gl.invalidateFramebuffer(gl.FRAMEBUFFER, [gl.DEPTH_ATTACHMENT]);   // tile GPUs need not write the depth back
+      const P = this.progs.post, u = P.u;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.outW, this.outH);
+      gl.useProgram(P.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.sceneTex);
+      gl.uniform1i(u.uScene, 0);
+      gl.uniform2f(u.uReg, this.w / this.allocW, this.h / this.allocH);
+      gl.uniform2f(u.uPx, 1 / this.allocW, 1 / this.allocH);
+      gl.uniform1f(u.uAA, this.fxaa ? 1 : 0);
+      gl.uniform1f(u.uSharp, sharp);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     gl.bindVertexArray(null);
     gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
   }
@@ -615,7 +693,7 @@ export class Renderer {
     this._setEnv(P);
     gl.uniformMatrix4fv(P.u.uVP, false, this.vp);
     gl.enable(gl.BLEND); gl.depthMask(false); gl.disable(gl.CULL_FACE);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ZERO);   // particles move: they write the TAA "moving" mask
     for (let mode = 0; mode < 5; mode++) {
       const g = groups[mode];
       if (!g.length) continue;
@@ -688,7 +766,7 @@ export class Renderer {
     gl.uniformMatrix4fv(P.u.uVP, false, this.vp);
     gl.enable(gl.BLEND); gl.depthMask(false); gl.disable(gl.CULL_FACE);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);   // decals sit on static ground: the mask is left alone
     const draw = (data, count, mode) => {
       const d = this.dyn.decal;
       d.stride = 9;

@@ -91,9 +91,9 @@ export class Person {
       m4.fromTRS(L, [x, top, 0], [Math.sin(ang / 2), 0, 0, Math.cos(ang / 2)], 1);
       m4.ident(D); D[13] = -len / 2;
       m4.mul(O, L, D); m4.mul(F, M, O);
-      r.add(mesh, F, { cast: true });
+      r.add(mesh, F, { cast: true, dyn: true });
     };
-    const at = (mesh, x, y, z) => { m4.ident(D); D[12] = x; D[13] = y; D[14] = z; m4.mul(F, M, D); r.add(mesh, F, { cast: true }); };
+    const at = (mesh, x, y, z) => { m4.ident(D); D[12] = x; D[13] = y; D[14] = z; m4.mul(F, M, D); r.add(mesh, F, { cast: true, dyn: true }); };
     part(this.meshes.leg, -0.1, 0.85, 0.85, sw); part(this.meshes.leg, 0.1, 0.85, 0.85, -sw);
     part(this.meshes.arm, -0.27, 1.4, 0.6, -sw); part(this.meshes.arm, 0.27, 1.4, 0.6, sw);
     at(this.meshes.torso, 0, 1.12, 0);

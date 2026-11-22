@@ -449,7 +449,8 @@ export class Car {
     const nearC = d2 < 45 * 45;   // brake calipers sit behind the spokes: not worth a draw call beyond 45 m
     const M = this._m || (this._m = new Float32Array(16));
     m4.fromTRS(M, b.pos, b.q, 1);
-    r.add(this.mesh, M, { hide: this.hide });
+    const dyn = b.moving();   // a moving car is drawn without temporal history (see gfx.js), a parked one gets the full TAA
+    r.add(this.mesh, M, { hide: this.hide, dyn });
     // wheels
     const W = this.vehicle.wheels;
     const T = this._t || (this._t = new Float32Array(16)), A = this._a || (this._a = new Float32Array(16)), B2 = this._b || (this._b = new Float32Array(16));
@@ -475,14 +476,14 @@ export class Car {
       T[0] = R3[0]; T[1] = R3[1]; T[2] = R3[2]; T[4] = R3[3]; T[5] = R3[4]; T[6] = R3[5]; T[8] = R3[6]; T[9] = R3[7]; T[10] = R3[8];
       T[12] = lc[0]; T[13] = lc[1]; T[14] = lc[2]; T[15] = 1;
       m4.mul(A, M, T);
-      r.add(wm.spin, A);
+      r.add(wm.spin, A, { dyn });
       // caliper: steer only (no spin), flipped on the left
       if (!nearC) continue;
       const fl2 = w.side > 0 ? [1, 0, 0, 0, 1, 0, 0, 0, 1] : [-1, 0, 0, 0, 1, 0, 0, 0, -1];
       const R4 = mm3(st, fl2);
       T[0] = R4[0]; T[1] = R4[1]; T[2] = R4[2]; T[4] = R4[3]; T[5] = R4[4]; T[6] = R4[5]; T[8] = R4[6]; T[9] = R4[7]; T[10] = R4[8];
       m4.mul(B2, M, T);
-      r.add(wm.caliper, B2, { cast: false });
+      r.add(wm.caliper, B2, { cast: false, dyn });
     }
     // contact shadow blob
     this.ctx.blobs && this.ctx.blobs.push(b, this.spec.geo);
@@ -504,18 +505,18 @@ export function drawDebris(ctx, d) {
     T.fill(0); T[0] = T[5] = T[10] = T[15] = 1; T[12] = -d.c[0]; T[13] = -d.c[1]; T[14] = -d.c[2];
     const O = d._o || (d._o = new Float32Array(16));
     m4.mul(O, M, T);
-    r.add(d.mesh, O, { only: d.part });
+    r.add(d.mesh, O, { only: d.part, dyn: b.moving() });
   } else if (d.kind === 'rubble') {
     m4.fromTRS(M, b.pos, b.q, d.s);
     if (d.k) { for (let i = 0; i < 3; i++) { M[i] *= d.k[0]; M[4 + i] *= d.k[1]; M[8 + i] *= d.k[2]; } }
-    r.add(d.mesh, M, { cast: false });
+    r.add(d.mesh, M, { cast: false, dyn: b.moving() });
   } else if (d.kind === 'wheel') {
     const wm = d.car.wheelMesh[d.front ? 0 : 1];
     const fl = d.side > 0 ? 1 : -1;
     T.fill(0); T[0] = fl; T[5] = 1; T[10] = fl; T[15] = 1;
     const O = d._o || (d._o = new Float32Array(16));
     m4.mul(O, M, T);
-    r.add(wm.spin, O);
+    r.add(wm.spin, O, { dyn: b.moving() });
   }
 }
 

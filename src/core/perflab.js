@@ -21,6 +21,8 @@ export class PerfLab {
       ['Smoke / sparks / decals off', () => { const u1 = patch(fx, 'collect', noop), u2 = patch(r, '_drawDecals', noop); return () => { u1(); u2(); }; }],
       ['Resolution x 0.7', () => { const o = r.dprScale; r.dprScale = o * 0.7; resize(); return () => { r.dprScale = o; resize(); }; }],
       ['Resolution x 0.5', () => { const o = r.dprScale; r.dprScale = o * 0.5; resize(); return () => { r.dprScale = o; resize(); }; }],
+      ['Temporal smoothing off (plain FXAA instead)', () => patch(r, 'taa', false)],
+      ['All edge smoothing off', () => patch(r, 'fxaa', false)],
     ];
     // last row: everything off at once = the floor (sky + car). If this is still slow, the cost is the screen size / the car, not the world.
     list.push(['EVERYTHING off (sky + car only)', () => {
@@ -79,7 +81,7 @@ export class PerfLab {
     this._ui(null);
     const d = document.createElement('div'); this.el = d; d.id = 'perfLabRes';
     d.style.cssText = 'position:fixed;inset:0;z-index:99;background:rgba(8,10,14,.985);color:#dde3ea;font:600 13px system-ui;padding:max(14px,env(safe-area-inset-top)) 16px 16px;overflow:auto';
-    d.innerHTML = '<div style="max-width:760px;margin:0 auto"><div style="font:800 18px system-ui;letter-spacing:.06em;margin-bottom:4px">PERF LAB</div><div style="opacity:.7;margin-bottom:10px">' + dev + ' · scene ' + a.r.w + 'x' + a.r.h + ' → canvas ' + a.r.outW + 'x' + a.r.outH + ' · quality ' + ['Low', 'Medium', 'High'][a.S.quality] + ' · FXAA ' + (a.r.fxaa ? 'ON' : 'off') + ' · scale ' + a.r.dprScale.toFixed(2) + ' · bodies ' + a.world.dyn.length + ' loose / ' + a.world.bodies.length + ' all · draws ' + a.r.stats.draws + ' · ' + Math.round(a.r.stats.tris / 1000) + 'k tris</div><table style="width:100%;border-collapse:collapse;line-height:1.9">' + rows + '</table><div style="margin:12px 0;color:#9fe3a6">' + verdict + '</div><div style="opacity:.7;margin-bottom:12px">Screenshot this and send it. (-x ms = how much faster the frame gets without that thing.)</div><button id="plClose" style="padding:10px 22px;font:800 15px system-ui;border-radius:6px;background:#f5b81c;color:#14110a;border:0">CLOSE</button></div>';
+    d.innerHTML = '<div style="max-width:760px;margin:0 auto"><div style="font:800 18px system-ui;letter-spacing:.06em;margin-bottom:4px">PERF LAB</div><div style="opacity:.7;margin-bottom:10px">' + dev + ' · scene ' + a.r.w + 'x' + a.r.h + ' → canvas ' + a.r.outW + 'x' + a.r.outH + ' · quality ' + ['Low', 'Medium', 'High'][a.S.quality] + ' · AA ' + (a.r.fxaa ? (a.r.taa ? 'temporal' : 'FXAA') : 'off') + ' · scale ' + a.r.dprScale.toFixed(2) + ' · bodies ' + a.world.dyn.length + ' loose / ' + a.world.bodies.length + ' all · draws ' + a.r.stats.draws + ' · ' + Math.round(a.r.stats.tris / 1000) + 'k tris</div><table style="width:100%;border-collapse:collapse;line-height:1.9">' + rows + '</table><div style="margin:12px 0;color:#9fe3a6">' + verdict + '</div><div style="opacity:.7;margin-bottom:12px">Screenshot this and send it. (-x ms = how much faster the frame gets without that thing.)</div><button id="plClose" style="padding:10px 22px;font:800 15px system-ui;border-radius:6px;background:#f5b81c;color:#14110a;border:0">CLOSE</button></div>';
     document.body.appendChild(d);
     d.querySelector('#plClose').onclick = () => { d.remove(); a.hideMenu(false); };
   }

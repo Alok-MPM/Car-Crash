@@ -18,14 +18,14 @@ const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in wind
 if (isTouch) document.documentElement.classList.add('touch');
 
 // ---------- persisted settings ----------
-const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1, fxaa: 1 };
+const defaults = { car: 'tauro', color: 0, assist: 1, tod: 'day', quality: isTouch ? 1 : 2, fps: 60, units: 'kmh', tilt: 0, sound: 1, fxaa: 1, aa: 2 };   // aa: 0 off, 1 FXAA (fast), 2 temporal AA (best; the default)
 let S = { ...defaults };
 try { Object.assign(S, JSON.parse(localStorage.getItem('crashyard') || '{}')); } catch (e) {}
 const save = () => { try { localStorage.setItem('crashyard', JSON.stringify(S)); } catch (e) {} };
 
 // ---------- core objects ----------
 let r;   // no MSAA (a large fixed cost on tablets): the scene is drawn offscreen at the governor's resolution and resolved to the canvas with FXAA + a light sharpen (S.fxaa)
-try { r = new Renderer($('gl'), { quality: S.quality, outScale: isTouch ? 0.7 : 1, fxaa: S.fxaa !== 0, scale: S.dyn && S.dynQ === S.quality ? S.dyn : isTouch ? 0.7 : 1 }); } catch (e) { $('loading').style.display = 'none'; $('err').style.display = 'flex'; console.error(e); throw e; }
+try { r = new Renderer($('gl'), { quality: S.quality, outScale: isTouch ? 0.7 : 1, fxaa: S.aa !== 0, taa: S.aa === 2, scale: S.dyn && S.dynQ === S.quality ? S.dyn : isTouch ? 0.7 : 1 }); } catch (e) { $('loading').style.display = 'none'; $('err').style.display = 'flex'; console.error(e); throw e; }
 const world = new World();
 const fx = new FX();
 const sfx = new Sfx();
@@ -676,7 +676,7 @@ function syncMenu() {
   seg('segTod', 'tod', () => r.setTOD(S.tod));
   seg('segQ', 'quality', applyQuality);
   seg('segFps', 'fps', () => { ctx.load = 1; });
-  seg('segAA', 'fxaa', () => { r.fxaa = S.fxaa !== 0; });
+  seg('segAA', 'aa', () => { r.fxaa = S.aa !== 0; r.taa = S.aa === 2; });
   seg('segU', 'units');
   seg('segTilt', 'tilt', () => { if (S.tilt && window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); });
 }
@@ -788,6 +788,15 @@ function watchBuildings() {
   const foci = wakeWatchers();
   if (scene.city) { if (!foci.length && player && player.vehicle) foci.push({ x: player.vehicle.body.pos[0], z: player.vehicle.body.pos[2], vx: 0, vz: 0 }); scene.city.update(1 / 60, foci); }
 }
+// render interpolation (see Body.blendPose): bodies are shown between their last two physics steps, so a moving picture advances evenly whatever the frame time does
+let stepNo = 0;
+const blended = [];
+function blendBodies() {
+  blended.length = 0;
+  const a = Math.min(1, acc / H);
+  for (const b of world.dyn) if (b.ppN === stepNo && !b.sleeping && b.blendPose(a)) blended.push(b);
+}
+function unblendBodies() { for (let i = 0; i < blended.length; i++) blended[i].unblend(); blended.length = 0; }
 function stepPhysics(real) {
   const ts = paused ? 0 : userSlow ? 0.25 : slowT > 0 ? 0.3 : 1;
   timeScale = ts;
@@ -795,6 +804,7 @@ function stepPhysics(real) {
   let n = 0;
   while (acc >= H && n < 4) {
     const a0 = performance.now();
+    stepNo++; for (const b of world.dyn) if (!b.sleeping) b.keepPrev(stepNo);
     if (n > 0) wakeWatchers();                                                          // the first step was prepared at frame start; later steps re-check (a car moves up to 11 m per frame at 600 km/h)
     for (const c of cars) { c.vehicle.step(H); if (c.vehicle.hyperOn || c.vehicle.speed > 110) c.vehicle.ccdBegin(H); }
     const a1 = performance.now();
@@ -811,6 +821,7 @@ let gLow = 0, gHigh = 0, lodHold = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const _f0 = performance.now();
+  if (blended.length) unblendBodies();             // (only if a frame was cut short by an error)
   const now = t / 1000;
   const tgt = S.fps || 0;                       // user's target FPS (0 = unlimited)
   if (tgt && now - last < 1 / tgt - 0.003) return;   // frame cap: saves heat + battery
@@ -917,7 +928,8 @@ function frame(t) {
   // debris housekeeping
   const deb = ctx.debris;
   for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if ((d.kind !== 'rubble' && d.t > 45) || d.t > 900 || d.body.pos[1] < -30 || deb.length > 1000 && i < deb.length - 1000) { world.remove(d.body); deb.splice(i, 1); } }
-  // camera
+  // camera (everything from here to the end of the draw sees the interpolated poses)
+  blendBodies();
   updateCamera(dt);
   // audio
   sfx.cam = camPos;
@@ -953,6 +965,7 @@ function frame(t) {
   if (lastBlast) { lastBlast.t += dt; if (lastBlast.t < 0.8) { const k = 1 - lastBlast.t / 0.8; r.addLight(lastBlast.pos[0], lastBlast.pos[1] + 2, lastBlast.pos[2], 40, 4 * k, 2 * k, 0.6 * k); } }
   const _d1 = performance.now();
   r.render();
+  unblendBodies();
   const _d2 = performance.now();
   PF.dr = PF.dr * 0.9 + (_d1 - _d0) * 0.1; PF.rn = PF.rn * 0.9 + (_d2 - _d1) * 0.1;
   updateHud(dt);
