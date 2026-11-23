@@ -446,13 +446,13 @@ export class Structures {
     const leafC = T0.leaf === 'wood' ? lift(wood, 1.5) : T0.leaf === 'fluted' ? [0.55, 0.55, 0.58] : T0.leaf === 'roller' ? [0.7, 0.72, 0.74] : T0.leaf === 'frame' ? [0.16, 0.17, 0.19] : lift(trim, 1.6);
     const leafT = T0.leaf === 'wood' ? T.wood : T0.leaf === 'fluted' ? T.fluted : T0.leaf === 'roller' || T0.leaf === 'frame' ? T.metal : T.plaster;
     box(0, 0, 0, hx, hy, hz, leafT, leafC);
-    const zf = hz + 0.004, dark = [0.05, 0.045, 0.04], glass = [0.05, 0.075, 0.09];
+    const zf = hz + 0.006, dark = [0.05, 0.045, 0.04], glass = [0.05, 0.075, 0.09];
     const faces = [1, -1];                                              // detail on the outside (+z) and the inside (-z)
     for (const f of faces) {
-      if (T0.grooves) for (let i = 1; i <= T0.grooves; i++) box(0, -hy + (2 * hy * i) / (T0.grooves + 1), f * zf, hx - 0.01, 0.006, 0.004, T.plaster, dark);
+      if (T0.grooves) for (let i = 1; i <= T0.grooves; i++) box(0, -hy + (2 * hy * i) / (T0.grooves + 1), f * zf, hx - 0.01, 0.006, 0.006, T.plaster, dark);
       if (T0.panels) { const [nc, nr] = T0.panels, pw = (2 * hx - 0.1) / nc, ph = (2 * hy - 0.1) / nr; for (let c = 0; c < nc; c++) for (let rr = 0; rr < nr; rr++) box(-hx + 0.05 + pw * (c + 0.5), -hy + 0.05 + ph * (rr + 0.5), f * (hz + 0.007), pw / 2 - 0.045, ph / 2 - 0.045, 0.007, T.wood, lift(wood, 1.2)); }
-      if (T0.lite) { const L = T0.lite, y0 = hy * L.y0, y1 = hy * L.y1, w = hx * L.w; box(0, (y0 + y1) / 2, f * (hz + 0.003), w, (y1 - y0) / 2, 0.003, T.plaster, glass); for (const sx of [-1, 1]) box(sx * (w + 0.012), (y0 + y1) / 2, f * zf, 0.012, (y1 - y0) / 2 + 0.012, 0.004, T.metal, dark); for (const yy of [y0 - 0.012, y1 + 0.012]) box(0, yy, f * zf, w + 0.024, 0.012, 0.004, T.metal, dark); }
-      if (T0.slats) for (let i = 1; i < T0.slats; i++) box(0, -hy + (2 * hy * i) / T0.slats, f * zf, hx - 0.005, 0.009, 0.004, T.plaster, [0.22, 0.23, 0.25]);
+      if (T0.lite) { const L = T0.lite, y0 = hy * L.y0, y1 = hy * L.y1, w = hx * L.w; box(0, (y0 + y1) / 2, f * (hz + 0.005), w, (y1 - y0) / 2, 0.005, T.plaster, glass); for (const sx of [-1, 1]) box(sx * (w + 0.012), (y0 + y1) / 2, f * zf, 0.012, (y1 - y0) / 2 + 0.012, 0.006, T.metal, dark); for (const yy of [y0 - 0.012, y1 + 0.012]) box(0, yy, f * zf, w + 0.024, 0.012, 0.006, T.metal, dark); }
+      if (T0.slats) for (let i = 1; i < T0.slats; i++) box(0, -hy + (2 * hy * i) / T0.slats, f * zf, hx - 0.005, 0.009, 0.006, T.plaster, [0.22, 0.23, 0.25]);
       const hxp = free * (hx - 0.1);
       if (T0.handle === 'slot') box(hxp, 0.0, f * (hz + 0.022), 0.014, hy * 0.42, 0.018, T.metal, T0.slotColor);
       else if (T0.handle === 'bar') box(hxp, 0.0, f * (hz + 0.03), 0.012, 0.32, 0.012, T.metal, [0.7, 0.72, 0.74]);

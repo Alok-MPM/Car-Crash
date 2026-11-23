@@ -943,7 +943,7 @@ function frame(t) {
   // render
   r.time = now;
   if (window.__camOv) { camPos = window.__camOv.eye; camLook = window.__camOv.look; if (window.__camOv.fov) camFov = window.__camOv.fov; }
-  r.begin({ eye: camPos, target: camLook, fov: camFov, near: 0.25, far: 9000, shadowCenter: [player.body.pos[0], 0, player.body.pos[2]] });
+  r.begin({ eye: camPos, target: camLook, fov: camFov, near: camMode === 2 || camMode === 3 || (lab && lab.active) || person.active ? 0.25 : 0.4, far: 9000, shadowCenter: [player.body.pos[0], 0, player.body.pos[2]] });
   fx.beginBlobs();
   const _d0 = performance.now();
   scene.draw(camPos);

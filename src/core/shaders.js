@@ -120,6 +120,7 @@ in vec4 vShadow;
 out vec4 outCol;
 uniform sampler2DShadow uShadowMap;
 uniform sampler2D uTex;
+uniform highp sampler2DArray uAtlas;   // the building tile atlas as 16 separate 256 x 256 layers (unit 4): no tile can bleed into its neighbour at any mip level or angle
 uniform float uShadowTexel, uShadowOn;
 uniform int uKind;
 uniform vec3 uBase, uEmis;
@@ -260,9 +261,8 @@ void main(){
     if (tiled) {
       float ti = vTile - 1.;
       acell = vec2(mod(ti, 4.), floor(ti / 4.));
-      vec2 fr = fract(vUv);
-      vec2 auv = (acell + vec2(0.012 + 0.976 * fr.x, 1. - 0.012 - 0.976 * fr.y)) * 0.25;
-      tx = textureGrad(uTex, auv, dUx * vec2(0.244, -0.244), dUy * vec2(0.244, -0.244));
+      // layer = tile, REPEAT wrap does the tiling, so the coordinate is continuous (mip level and anisotropy come straight from its derivatives; the image's top row is v = 0, hence the flip)
+      tx = textureGrad(uAtlas, vec3(vUv.x, -vUv.y, ti), dUx * vec2(1., -1.), dUy * vec2(1., -1.));
     } else tx = texture(uTex, vUv);
   }
   if (uKind == 10) {
@@ -508,11 +508,15 @@ void main(){
       float nr2 = 1. - smoothstep(4., 28., ddt);
       vec3 wp2 = vWorldMod;
       vec2 sp2 = abs(vNrm.y) > 0.7 ? wp2.xz : vec2(wp2.x * abs(vNrm.z) + wp2.z * abs(vNrm.x), wp2.y);
-      float h1 = vn2(sp2 * 46.);
-      albedo *= 1. + 0.008 * (h1 - .5) * nr2;
-      float e2 = 0.0035, hx2 = vn2((sp2 + vec2(e2, 0.)) * 46.), hy2 = vn2((sp2 + vec2(0., e2)) * 46.);
-      vec3 tN2 = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
-      N = normalize(N + (tN2 * (h1 - hx2) + vec3(0., 1., 0.) * (h1 - hy2)) * 0.03 * nr2);
+      // the grain is 2 cm fine: a pixel wider than a quarter of that cannot show it, it would only shimmer. Band-limited by the wall-plane pixel size, and not even evaluated when it has faded out.
+      float pwb = max(length(dFdx(sp2)), length(dFdy(sp2))) + 1e-5, b46 = bl(46., pwb) * nr2;
+      if (b46 > 0.004) {
+        float h1 = vn2(sp2 * 46.);
+        albedo *= 1. + 0.008 * (h1 - .5) * b46;
+        float e2 = 0.0035, hx2 = vn2((sp2 + vec2(e2, 0.)) * 46.), hy2 = vn2((sp2 + vec2(0., e2)) * 46.);
+        vec3 tN2 = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
+        N = normalize(N + (tN2 * (h1 - hx2) + vec3(0., 1., 0.) * (h1 - hy2)) * 0.03 * b46);
+      }
     }
     else {
       // paint / plaster / brick / concrete: real surface character. Roller-coat grain and roughcast bumps close up, soft blotches and long vertical
@@ -521,19 +525,22 @@ void main(){
       vec2 sp = abs(vNrm.y) > 0.7 ? wp.xz : vec2(wp.x * abs(vNrm.z) + wp.z * abs(vNrm.x), wp.y);
       float nr = 1. - smoothstep(4., 28., ddt), md = 1. - smoothstep(25., 130., ddt);
       float wad = 0.;
+      // wall-plane pixel size: every noise layer is band-limited by it (an octave finer than ~2-4 pixels would alias and shimmer as the car moves, so it fades out and is not evaluated)
+      float pwb = max(length(dFdx(sp)), length(dFdy(sp))) + 1e-5;
+      float b46 = bl(46., pwb) * nr, b9 = (1. - smoothstep(0.2, 0.5, 9. * pwb)) * md;
       // each layer only where it is visible: grain and roughcast bumps inside 28 m, blotches and streaks inside 130 m (the noise is not even evaluated outside)
       if (md > 0.004) {
-        float g2 = vn2(sp * 9.), g3 = vn2(vec2(sp.x * 1.6, sp.y * 0.2));
+        float g2 = b9 > 0.004 ? vn2(sp * 9.) : 0.5, g3 = vn2(vec2(sp.x * 1.6, sp.y * 0.2));
         // old walls are not all equally grimy: a slow patchwork (per ~9 m of wall) decides how much staining a stretch carries
         float wv = mix(0.3, 1., smoothstep(.3, .7, vn2(vec2(wp.x * 0.11 + wp.z * 0.17, wp.y * 0.07 + 3.1))));
-        wad = (0.06 * (g2 - .5) * md - 0.12 * (g3 - .45) * md) * wv;
+        wad = (0.06 * (g2 - .5) * b9 - 0.12 * (g3 - .45) * md) * wv;
       }
-      if (nr > 0.004) {
+      if (b46 > 0.004) {
         float g1 = vn2(sp * 46.);
-        wad += 0.02 * (g1 - .5) * nr;
+        wad += 0.02 * (g1 - .5) * b46;
         vec3 tN = normalize(vec3(vNrm.z, 0., -vNrm.x) + vec3(1e-4, 0., 0.));
         float e = 0.0035, hx = vn2((sp + vec2(e, 0.)) * 46.), hy = vn2((sp + vec2(0., e)) * 46.);
-        N = normalize(N + (tN * (g1 - hx) + vec3(0., 1., 0.) * (g1 - hy)) * 0.45 * nr);
+        N = normalize(N + (tN * (g1 - hx) + vec3(0., 1., 0.) * (g1 - hy)) * 0.45 * b46);
       }
       albedo *= 1. + wad;
     }
@@ -629,7 +636,8 @@ void main(){
     // curtain-wall / ribbon glazing (the heavier 'glass' tint): slim dark aluminium mullions every 1.5 m so a long band reads as real glazing, not one slab
     if (uAlpha > 0.4) {
       vec3 wq = vWorldMod; float tq = wq.x * abs(vNrm.z) + wq.z * abs(vNrm.x);
-      float mq = 1. - smoothstep(0.02, 0.05, abs(fract(tq / 1.5 + 0.5) - 0.5) * 1.5);
+      float fwq = max(fwidth(tq), 0.001);                                   // metres per pixel along the wall: a 5 cm bar narrower than a pixel would flicker, so it widens with the pixel and then fades out
+      float mq = (1. - smoothstep(0.02, 0.05 + 0.6 * fwq, abs(fract(tq / 1.5 + 0.5) - 0.5) * 1.5)) * (1. - smoothstep(0.05, 0.12, fwq));
       reflD *= 0.75 + 0.5 * fract(wq.y / 3.2);
       vec3 c0 = tintD * al + reflD + glint * uSunCol * 3. + glow * al;
       c0 = mix(c0, vec3(0.06, 0.065, 0.07), mq * 0.92); al = mix(al, 0.97, mq);
@@ -1020,6 +1028,9 @@ vec3 histCR(vec2 uv) {   // Catmull-Rom through five bilinear taps: keeps the ac
          + texture(uHist, vec2(t3.x, t12.y)).rgb * a3 + texture(uHist, vec2(t12.x, t3.y)).rgb * a4;
   return max(r / (a0 + a1 + a2 + a3 + a4), 0.0);
 }
+vec3 toYCoCg(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }
+vec3 fromYCoCg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+float dep(ivec2 t, ivec2 hi) { return texelFetch(uDepth, clamp(t, ivec2(0), hi), 0).r; }
 void main() {
   vec2 sp = vUv * uSize;
   ivec2 hi = ivec2(uSize) - 1;
@@ -1032,7 +1043,8 @@ void main() {
     vec2 d = vec2(t) + 0.5 - uJit - sp;            // where the sample really is, minus where this output pixel is (scene pixels)
     float w = exp(-2.29 * dot(d, d));
     acc += s.rgb * w; ws += w;
-    m1 += s.rgb; m2 += s.rgb * s.rgb; mn = min(mn, s.rgb); mx = max(mx, s.rgb); aMin = min(aMin, s.a);
+    vec3 y = toYCoCg(s.rgb);                        // the neighbourhood is judged in YCoCg: brightness and colour are separated, so history is clipped far less in colour than in RGB
+    m1 += y; m2 += y * y; mn = min(mn, y); mx = max(mx, y); aMin = min(aMin, s.a);
   }
   vec3 cur = acc / ws;
   if (aMin < 0.5) {                                 // something moving here: no history, spatial AA only
@@ -1043,19 +1055,28 @@ void main() {
   float k = 0.0;
   vec3 h = cur;
   if (uHistW > 0.0) {
-    float d = texelFetch(uDepth, c0, 0).r;
-    vec2 tp = (vec2(c0) + 0.5 - uJit) / uSize;      // true position of the nearest sample
-    vec4 pc = uReproj * vec4(tp * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
-    vec2 huv = vUv + (pc.xy / pc.w * 0.5 + 0.5 - tp);
+    // depth of this pixel: a plane's depth is linear on screen, so it is extrapolated from the cross of neighbours to the exact pixel position (smooth motion vectors, no scene-texel steps);
+    // at a silhouette (a neighbour much nearer or farther) the NEAREST depth is taken, so a building's edge is not dragged along with the sky or road behind it
+    float dC = dep(c0, hi), dR = dep(c0 + ivec2(1, 0), hi), dL = dep(c0 - ivec2(1, 0), hi), dU = dep(c0 + ivec2(0, 1), hi), dD = dep(c0 - ivec2(0, 1), hi);
+    float dNear = min(min(dC, dR), min(min(dL, dU), dD)), dFar = max(max(dC, dR), max(max(dL, dU), dD));
+    float d;
+    if (dFar - dNear > 0.3 * (1.0 - dNear) + 1e-7) d = dNear;
+    else { vec2 off = sp - (vec2(c0) + 0.5 - uJit); d = dC + 0.5 * (dR - dL) * off.x + 0.5 * (dU - dD) * off.y; }
+    vec4 pc = uReproj * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    vec2 huv = pc.xy / pc.w * 0.5 + 0.5;
     if (pc.w > 0.0 && huv.x > 0.002 && huv.y > 0.002 && huv.x < 0.998 && huv.y < 0.998) {
-      h = histCR(huv);
+      float pixVel = length((huv - vUv) / uOutPx);  // how far this pixel moved since the last frame, in output pixels
+      // sharp (Catmull-Rom) resampling only while the picture is nearly still: in motion its negative lobes ring, and the five fetches per pixel cost the most exactly while driving
+      vec3 hr = pixVel > 0.75 ? texture(uHist, huv).rgb : histCR(huv);
+      vec3 hy = toYCoCg(hr);
       vec3 mu = m1 * (1.0 / 9.0), sg = sqrt(max(m2 * (1.0 / 9.0) - mu * mu, 0.0));
-      vec3 bl = max(mn, mu - 1.5 * sg), bh = min(mx, mu + 1.5 * sg);
-      h = clamp(h, min(bl, bh), max(bl, bh));
-      k = uHistW;
+      float gam = mix(1.5, 1.1, smoothstep(0.3, 2.0, pixVel));   // still: generous (keeps sub-pixel detail steady); moving: tight (no smear, no shimmer)
+      vec3 bl = max(mn, mu - gam * sg), bh = min(mx, mu + gam * sg);
+      h = fromYCoCg(clamp(hy, min(bl, bh), max(bl, bh)));
+      k = uHistW * mix(1.0, 0.72, smoothstep(0.5, 5.0, pixVel));
     }
   }
-  oColor = vec4(mix(cur, h, k), 1.0);
+  oColor = vec4(mix(cur, max(h, 0.0), k), 1.0);
 }`;
 
 // accumulated picture -> canvas with a light sharpen (clamped to the neighbours so it never rings)

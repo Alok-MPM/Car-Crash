@@ -191,6 +191,26 @@ export class Renderer {
     this._texParams(opt);
     return t;
   }
+  // an atlas of cols x rows tiles (each S x S) as a texture ARRAY: one layer per tile, so filtering can never reach into a neighbouring tile; REPEAT wrap lets the shader tile it with no fract()
+  texArrayFromCanvas(cv, cols, rows, S) {
+    const gl = this.gl, n = cols * rows, g = cv.getContext('2d');
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, t);
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, Math.floor(Math.log2(S)) + 1, gl.RGBA8, S, S, n);
+    const all = g.getImageData(0, 0, cv.width, cv.height).data, buf = new Uint8Array(S * S * 4), rb = S * 4;   // one read-back, then each tile is copied out row by row
+    for (let i = 0; i < n; i++) {
+      const x0 = (i % cols) * S, y0 = ((i / cols) | 0) * S;
+      for (let y = 0; y < S; y++) { const o = ((y0 + y) * cv.width + x0) * 4; buf.set(all.subarray(o, o + rb), y * rb); }
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, S, S, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    }
+    gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    if (this.aniso) gl.texParameterf(gl.TEXTURE_2D_ARRAY, this.aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(this.aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+    return t;
+  }
   _texParams(opt) {
     const gl = this.gl;
     const mip = opt.mip !== false && opt.w !== 1;
@@ -320,12 +340,13 @@ export class Renderer {
       const sd = this.sunDir;
       const lv = m4.create(), lp = m4.create();
       const up = Math.abs(sd[1]) > 0.95 ? [1, 0, 0] : [0, 1, 0];
-      // snap the centre to texel size to stop shimmering
+      // The shadow window follows the car, so its texel grid must stay glued to the WORLD or every shadow edge crawls while driving. The window is centred on `c` (so `c` itself is always at (0,0) in
+      // light space: snapping that does nothing). The world origin is the fixed reference: where it falls in light space says where the grid sits, and the window is shifted by the remainder.
       const texel = (2 * R) / this.shadowSize;
       const eyeL = [c[0] + sd[0] * 300, c[1] + sd[1] * 300, c[2] + sd[2] * 300];
       m4.lookAt(lv, eyeL, c, up);
-      const cl = m4.xform(lv, c);
-      const sx = Math.round(cl[0] / texel) * texel - cl[0], sy = Math.round(cl[1] / texel) * texel - cl[1];
+      const T = m4.xform(lv, [-this.eye[0], -this.eye[1], -this.eye[2]]);
+      const sx = T[0] - Math.round(T[0] / texel) * texel, sy = T[1] - Math.round(T[1] / texel) * texel;
       m4.ortho(lp, -R + sx, R + sx, -R + sy, R + sy, 20, 650);
       m4.mul(this.lightVP, lp, lv);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFB);
@@ -423,6 +444,8 @@ export class Renderer {
     gl.uniform1i(u.uSoil, 2);
     gl.uniform2f(u.uEyeXZ, this.eye[0], this.eye[2]);
     gl.uniform1i(u.uMeta, 3);
+    gl.uniform1i(u.uAtlas, 4);
+    gl.activeTexture(gl.TEXTURE0 + 4); gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.atlasArr || null);
     if (this.soil && this.soil.on) {
       gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, this.soil.tex); gl.uniform4f(u.uSoilO, this.soil.ox, this.soil.oz, this.soil.size, 1);
       gl.activeTexture(gl.TEXTURE0 + 3); gl.bindTexture(gl.TEXTURE_2D, this.soil.meta);
@@ -543,7 +566,7 @@ export class Renderer {
       gl.useProgram(Q.p);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, H[cur].tex); gl.uniform1i(uq.uHist, 0);
       gl.uniform2f(uq.uOutPx, 1 / this.outW, 1 / this.outH);
-      gl.uniform1f(uq.uSharp, sharp * 0.6);
+      gl.uniform1f(uq.uSharp, sharp * 0.4);   // gentle: a stronger sharpen would only amplify the ripple of a moving picture
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       this.histCur = prev; this.histOk = true;
       this.prevVPU.set(this.vpU); this.prevEye[0] = this.eye[0]; this.prevEye[1] = this.eye[1]; this.prevEye[2] = this.eye[2];

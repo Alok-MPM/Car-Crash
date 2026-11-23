@@ -123,6 +123,7 @@ export function makeAtlas(r) {
   c.width = S * COLS; c.height = S * ROWS;
   const g = c.getContext('2d');
   for (let t = 0; t < COLS * ROWS; t++) drawTile(g, (t % COLS) * S, ((t / COLS) | 0) * S, S, t);
+  r.atlasArr = r.texArrayFromCanvas(c, COLS, ROWS, S);   // the same 16 tiles as separate layers: the building shader tiles from this one
   return r.texFromCanvas(c, { mip: true });
 }
 
