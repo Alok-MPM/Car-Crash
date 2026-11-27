@@ -46,6 +46,18 @@ vec3 finish(vec3 c){
 }
 `;
 
+
+// terrain window (toroidal, 0.5 m cells, 128 m): real ground heights round the camera, for the soil patch and the grass roots
+export const TERR_GLSL = /* glsl */ `
+uniform highp sampler2D uTH;
+uniform vec4 uTO;          // window origin x, z (m), size (m), 1 = on
+float terrH(vec2 w){
+  vec2 q = w * 2. - 0.5, i = floor(q), f = q - i;
+  ivec2 a = ivec2(mod(i, 256.)), b = ivec2(mod(i + 1., 256.));
+  float h00 = texelFetch(uTH, a, 0).r, h10 = texelFetch(uTH, ivec2(b.x, a.y), 0).r, h01 = texelFetch(uTH, ivec2(a.x, b.y), 0).r, h11 = texelFetch(uTH, b, 0).r;
+  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+}
+`;
 export const VS_MAIN = /* glsl */ `#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
@@ -58,6 +70,7 @@ uniform float uNBias, uTime, uSway, uTerr;
 uniform highp sampler2D uSoil;   // deformable soil field: R = dug depth, A = spoil heap (the terrain patch is displaced by them)
 uniform vec4 uSoilO;
 uniform vec2 uEyeXZ;
+${TERR_GLSL}
 out vec3 vPosRel, vNrm, vCol, vWorldMod, vLocal;
 out vec2 vUv;
 flat out float vTile;
@@ -69,8 +82,10 @@ void main(){
     vec4 sv = textureLod(uSoil, (p.xz + uEyeXZ) / uSoilO.z, 0.);
     float ef = 1. - smoothstep(0.8, 1., max(abs(aPos.x), abs(aPos.z)) / 17.9);
     p.y += (sv.a * 0.2 - sv.r * 0.6) * ef;
+    if (uTO.w > 0.5) p.y += terrH(p.xz + uEyeXZ);                              // the patch lies on the real ground
   }
   vec3 n = normalize(mat3(uModel) * aNrm);
+  if (uTerr > 0.5 && uSoilO.w > 0.5 && uTO.w > 0.5) { vec2 wq = p.xz + uEyeXZ; n = normalize(vec3(terrH(wq - vec2(0.5, 0.)) - terrH(wq + vec2(0.5, 0.)), 1., terrH(wq - vec2(0., 0.5)) - terrH(wq + vec2(0., 0.5)))); }
   if (uSway > 0.) {
     // wind, all in the vertex shader. One gust per tree (phase from where the tree stands, so a gust travels through a row of trees), then three layers:
     //  1) the whole tree leans downwind, more with height (trunk, branches, leaves and fruit all get the same lean, nothing tears apart)
@@ -132,6 +147,8 @@ uniform sampler2D uMeta;   // same window: 255 where the ground is deformable la
 uniform vec4 uTerrC;       // terrain patch: centre x, z, half size (m), 1 = on
 uniform float uTerr, uUnder; // this draw IS the patch / is a flat ground sheet that must give way to the patch where it is drawn
 uniform vec2 uEyeXZ;       // true eye position (the fragment position is eye-relative)
+uniform highp sampler2D uTG;   // terrain window ground: rgb = sqrt(colour), a = cover * 50 + moisture * 49 (nearest)
+uniform vec4 uTO;          // terrain window origin x, z, size, 1 = on
 uniform float uNear2;   // kind 11 (tree pictures): squared radius around the eye inside which pictures are hidden because the real 3D tree is drawn
 uniform vec4 uLP[4], uLD[4], uLC[4];
 uniform int uNL;
@@ -152,6 +169,16 @@ float relief(vec2 gp, float cls, float pw){
   vec2 pj = abs(fract(gp * 0.8) - .5);
   float jw = max(0.05, pw * 1.2);
   return -smoothstep(.5 - jw, .5, max(pj.x, pj.y)) * (0.05 / jw) + (vn2(gp * 24.) - .5) * 0.12 * bl(24., pw) + 0.06;
+}
+// cellular noise: x = distance to the nearest cell point, y = (second - first) distance, which is ~0 on a cell border: dried-mud cracks
+vec2 wor(vec2 p){
+  vec2 i = floor(p), f = fract(p); float d1 = 9., d2 = 9.;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y)), o = vec2(h21(i + g + vec2(3.1, 7.7)), h21(i + g + vec2(11.3, 2.9)));
+    vec2 r = g + o - f; float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return vec2(sqrt(d1), sqrt(d2) - sqrt(d1));
 }
 // value noise with analytic gradient (xyz = value, d/dx, d/dy)
 vec3 vn2d(vec2 p){
@@ -340,6 +367,22 @@ void main(){
     albedo = uBase * vCol; ao = 0.8 + 0.2 * smoothstep(0.,0.4,abs(vNrm.y));
   } else if (uKind == 7) {
     // natural ground: soil / grass / dry grass. Patchy at large scale, clods and blades up close, no repeating texture
+    // terrain ground (flake 4): colour, moisture and cover come per vertex (the big chunks) or per texel of the terrain window (the soil patch); cover picks lawn or bare soil
+    float fl = uFlake, moist = 0.3, cov = 0.25;
+    vec3 gbase = uBase * vCol;
+    bool tg = uFlake > 3.5 || (uTerr > 0.5 && uTO.w > 0.5);      // the soil patch reads the terrain window too, so it is the same ground as the chunks round it (desert tan, rock, snow, fields)
+    if (tg) {
+      moist = vUv.x; cov = vUv.y;
+      if (uTerr > 0.5 && uTO.w > 0.5) {
+        vec2 aw = vPosRel.xz + uEyeXZ;
+        vec4 tq = texelFetch(uTG, ivec2(mod(floor(aw * 2.), 256.)), 0);
+        gbase = tq.rgb * tq.rgb;
+        float code = floor(tq.a * 255. + 0.5), ci = floor(code / 50.);
+        cov = ci * 0.25; moist = (code - ci * 50.) / 49.;
+        if (code > 253.5) { cov = 0.; moist = 0.4; }      // 254 / 255: bare rock / snow (hard ground)
+      }
+      fl = (cov < 0.12 || (cov > 0.37 && cov < 0.62)) ? 2. : 1.;
+    }
     vec2 gp = vWorldMod.xz * uTexScale;
     float pwg = pw * uTexScale;
     float f1 = 1.-smoothstep(40.,260.,ddt), f2 = 1.-smoothstep(6.,45.,ddt), f3 = 1.-smoothstep(1.5,16.,ddt);
@@ -349,12 +392,44 @@ void main(){
     if (f2 > 0.003) n3 = vn2(gp*2.4);
     if (f3 > 0.003) { n4 = vn2(gp*13.); n5 = vn2(gp*21. + 5.); }
     float v = 1. + 0.30*(n0-.5) + 0.22*(n1-.5)*f1 + 0.16*(n2-.5)*f1 + 0.22*(n3-.5)*f2 + 0.26*(n4-.5)*f3*bl(13., pwg) + 0.12*(n5-.5)*f3*bl(21., pwg);
-    albedo = uBase * vCol * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
-    if (uFlake > 0.5 && uFlake < 1.5) albedo *= vec3(0.84, 0.76, 0.82) * mix(0.68, 1., smoothstep(1., 30., dist));   // real turf is darker and more olive than candy green, and darkest close up where blades shade the ground between them
+    albedo = gbase * v * mix(vec3(1.), vec3(1.10,1.0,0.78), smoothstep(.35,.7,n0));
+    if (fl > 0.5 && fl < 1.5) albedo *= vec3(0.84, 0.76, 0.82) * mix(0.68, 1., smoothstep(1., 30., dist));   // real turf is darker and more olive than candy green, and darkest close up where blades shade the ground between them
     rough = 0.97; metal = 0.; coat = 0.;
+    if (tg) {
+      // ---- region soil (EdgeSoil profiles): dry cracked loam, alluvial loam, ploughed furrows, wet soil
+      float dry = 1. - smoothstep(0.1, 0.38, moist), wetT = smoothstep(0.42, 0.85, moist);
+      if (fl > 1.5 && cov < 0.12 && dry > 0.04 && ddt < 110.) {
+        float fade = (1. - smoothstep(35., 110., ddt)) * dry;
+        vec2 w1 = wor(gp * 2.4), w2 = wor(gp * 0.62 + 17.);
+        float cr1 = smoothstep(0., 0.09, w1.y), cr2 = smoothstep(0., 0.05, w2.y);
+        float crev = mix(1., 0.5 + 0.5 * cr1, bl(2.4, pwg) * fade) * mix(1., 0.32 + 0.68 * cr2, bl(0.62, pwg) * fade);
+        albedo *= crev * (1. + (w1.x - 0.4) * 0.35 * fade);
+        ao *= mix(1., 0.55 + 0.45 * cr2, fade);
+        rough = 0.99;
+      }
+      if (cov > 0.37 && cov < 0.62) {
+        // ploughed field: furrows, direction fixed per ~120 m field
+        vec2 fc = floor(gp / 120.); float ang = h21(fc + 5.) * 3.1416;
+        float fu = dot(gp, vec2(cos(ang), sin(ang))) * 6.2832 / 0.75;
+        float fur = 0.5 + 0.5 * sin(fu + (vn2(gp * 0.5) - .5) * 1.5);
+        float k = (1. - smoothstep(25., 110., ddt)) * bl(1.33, pwg);
+        albedo *= mix(1., 0.62 + 0.5 * fur, k);
+        N = normalize(N + vec3(cos(ang), 0., sin(ang)) * cos(fu) * 0.22 * k);
+      }
+      if (cov > 0.62) {
+        // standing crop: faint rows
+        vec2 fc = floor(gp / 90.); float ang = h21(fc + 9.) * 3.1416;
+        float fu = dot(gp, vec2(cos(ang), sin(ang))) * 6.2832 / 0.5;
+        albedo *= mix(1., 0.82 + 0.2 * (0.5 + 0.5 * sin(fu)), (1. - smoothstep(20., 80., ddt)) * bl(2., pwg));
+      }
+      // wet soil is darker and glossy (keechar when it is soaked)
+      albedo *= mix(1., 0.5, wetT);
+      albedo = mix(albedo, vec3(0.05, 0.034, 0.02), smoothstep(0.7, 0.95, moist) * 0.4);
+      rough = mix(rough, 0.3, wetT * 0.8);
+    }
     // ---- soil field: tyre prints, torn grass, pits, spoil heaps and the bare root zones round trees (lawns and soil only, never pavers)
     float sMix = 0., comp = 0., dep = 0., bare = 0.;
-    if (uSoilO.w > 0.5 && uFlake > 0.5 && uFlake < 2.5) {
+    if (uSoilO.w > 0.5 && fl > 0.5 && fl < 2.5) {
       vec2 wxz = vPosRel.xz + uEyeXZ, lcw = wxz - uSoilO.xy;
       vec2 ed = min(lcw, vec2(uSoilO.z) - lcw);
       float sf = smoothstep(1., 9., min(ed.x, ed.y)) * (1. - smoothstep(70., 105., dist));
@@ -368,9 +443,9 @@ void main(){
           float mnd = s0.a * 0.2 * sf;
           vec2 sgr = vec2((sxp.a - sxm.a) * 0.2 - (sxp.r - sxm.r) * 0.6, (szp.a - szm.a) * 0.2 - (szp.r - szm.r) * 0.6) / (uSoilO.z / 1024.) * sf;
           float torn = smoothstep(0.3, 0.7, s0.g + (vn2(gp * 5.) - .5) * 0.45 + (vn2(gp * 21.) - .5) * 0.25 * bl(21., pwg));
-          bare = (uFlake < 1.5 ? torn : 0.) * sf;
+          bare = (fl < 1.5 ? torn : 0.) * sf;
           // real soil profile: dry crust, dark moist topsoil, ochre clay subsoil, pale parent material with grit. Wavy boundaries, so a pit wall shows strata.
-          float sMixE = clamp(max(bare, uFlake < 1.5 ? smoothstep(0.03, 0.075, dep) : smoothstep(0.004, 0.02, dep)) + smoothstep(0.004, 0.025, mnd), 0., 1.);   // a rolling rut on grass stays grass (pressed); only a real hollow shows soil
+          float sMixE = clamp(max(bare, fl < 1.5 ? smoothstep(0.03, 0.075, dep) : smoothstep(0.004, 0.02, dep)) + smoothstep(0.004, 0.025, mnd), 0., 1.);   // a rolling rut on grass stays grass (pressed); only a real hollow shows soil
           float dd = dep + (vn2(gp * 9. + 3.) - .5) * 0.03 + (vn2(gp * 2.) - .5) * 0.04;
           vec3 sc = mix(vec3(0.150, 0.104, 0.068), vec3(0.052, 0.034, 0.022), smoothstep(0., 0.05, dd));
           sc = mix(sc, vec3(0.205, 0.128, 0.066), smoothstep(0.13, 0.19, dd));
@@ -400,12 +475,12 @@ void main(){
     }
     // real 3D relief up close (fades out with distance): lawn blades and tufts, soil clods and furrows with damp glossy patches, paver joints
     float rl = (1. - smoothstep(4., 45., ddt)) * (1. - 0.8 * comp);
-    if (uFlake > 0.5 && rl > 0.01) {
-      float h0 = relief(gp, uFlake, pwg), e = 0.004;
-      float hx = relief(gp + vec2(e, 0.), uFlake, pwg), hz = relief(gp + vec2(0., e), uFlake, pwg);
-      float amp = uFlake < 1.5 ? 0.9 : uFlake < 2.5 ? 1.5 : 1.2;
+    if (fl > 0.5 && rl > 0.01) {
+      float h0 = relief(gp, fl, pwg), e = 0.004;
+      float hx = relief(gp + vec2(e, 0.), fl, pwg), hz = relief(gp + vec2(0., e), fl, pwg);
+      float amp = fl < 1.5 ? 0.9 : fl < 2.5 ? 1.5 : 1.2;
       N = normalize(N + vec3(h0 - hx, 0., h0 - hz) * amp * rl * 3. * (1. - sMix));
-      if (uFlake < 1.5) {
+      if (fl < 1.5) {
         // meadow: rich emerald, clover patches and sun-dried blade tips, tuft by tuft
         float dry = smoothstep(.55, .8, vn2(gp * 0.9 + 3.)), clov = smoothstep(.6, .75, vn2(gp * 1.6 + 11.)), tuft = vn2(gp * 5.3);
         vec3 gA = albedo * (1. + (h0 - .5) * 0.34 * rl) * mix(vec3(0.9, 1.1, 0.84), vec3(1.2, 1.04, 0.62), dry * (0.35 + 0.65 * h0));
@@ -424,7 +499,7 @@ void main(){
           }
         }
       }
-      else if (uFlake < 2.5) {
+      else if (fl < 2.5) {
         float damp = smoothstep(.5, .75, vn2(gp * 0.16 + 4.));
         albedo *= (0.82 + 0.36 * h0) * mix(1., 0.72, damp * rl);
         rough = mix(0.9, 0.68, damp);
@@ -835,6 +910,8 @@ uniform vec4 uC;                         // window centre x, z, half size, layer
 uniform vec4 uC0;                        // near window centre x, z, half size, blade count
 uniform vec4 uP;                         // density, height scale, pixel size per metre of distance, bend
 uniform vec4 uSoilO;
+uniform vec4 uGR;                         // region: density factor, height factor, dryness (straw colour), crop growth 0..1
+${TERR_GLSL}
 uniform vec4 uCarA[6], uCarB[6];         // cars near the eye: centre x, z, forward x, z / half length, half width (tufts under a body are pressed flat)
 uniform float uNCars;
 uniform sampler2D uSoil, uMeta;
@@ -854,18 +931,21 @@ void main(){
   float c0 = max(d0.x, d0.y), c1 = max(d1.x, d1.y);
   float lay = uC.w;                                                                      // 0 near, 1 far ring, 2 dense short turf right round the eye
   float w = lay < 0.5 ? 1. - smoothstep(0.76, 1., c0) : lay < 1.5 ? smoothstep(0.76, 1., c0) * (1. - smoothstep(0.8, 1., c1)) : 1. - smoothstep(0.7, 1., c1);
-  float dens = 0.62 + 0.38 * vn2(pos * 0.35 + 7.);                    // bald-ish and thick patches
+  float dens = (0.62 + 0.38 * vn2(pos * 0.35 + 7.)) * uGR.x;           // bald-ish and thick patches (and thin where the region is dry)
   float bi = aB.z;
   if (w < 0.01 || h5 > dens || bi >= uC0.w) { collapse(); return; }
   vec2 tc = pos / uSoilO.z;
   vec4 sv = textureLod(uSoil, tc, 0.);
   float meta = textureLod(uMeta, tc, 0.).r;
   float dep = sv.r * 0.6, mound = sv.a * 0.2, torn = sv.g, comp = sv.b;
-  float vis = step(0.5, meta) * (1. - smoothstep(0.22, 0.62, torn)) * (1. - smoothstep(0.01, 0.032, dep)) * (1. - smoothstep(0.008, 0.026, mound));
+  // meta codes: 255 lawn / meadow, 200 green crop, 170 ripe crop, 140 bare or ploughed soil (no grass), 0 hard ground
+  float mkind = meta > 0.9 ? 0. : meta > 0.74 ? 1. : meta > 0.64 ? 2. : 3.;
+  float vis = step(0.5, meta) * step(mkind, 2.5) * (1. - smoothstep(0.22, 0.62, torn)) * (1. - smoothstep(0.01, 0.032, dep)) * (1. - smoothstep(0.008, 0.026, mound));
   // height classes: mostly short (3-8 cm), some medium, a few tall tufts (16-30 cm)
   float hgt = h3 < 0.7 ? 0.035 + 0.045 * h4 : h3 < 0.93 ? 0.08 + 0.07 * h4 : 0.16 + 0.14 * h4;
   if (lay > 1.5) hgt = h3 < 0.88 ? 0.02 + 0.03 * h4 : 0.05 + 0.05 * h4;               // the carpet: short turf, mostly 2-5 cm
-  hgt *= uP.y * (lay > 0.5 && lay < 1.5 ? 1.35 : 1.);
+  hgt *= uP.y * uGR.y * (lay > 0.5 && lay < 1.5 ? 1.35 : 1.);
+  if (mkind > 0.5) { hgt = (0.38 + 0.4 * h4) * (0.25 + 0.75 * uGR.w); if (lay > 1.5) hgt *= 0.55; }      // standing wheat / paddy: knee high, thick
   float pressed = clamp(comp * 1.25, 0., 1.);
   for (int ci = 0; ci < 6; ci++) {
     if (float(ci) >= uNCars) break;
@@ -875,7 +955,7 @@ void main(){
   }
   float H = hgt * w * vis * (1. - 0.78 * pressed);
   if (H < 0.004) { collapse(); return; }
-  float gy = 0.0045 + mound - dep - 0.012;               // rooted a little below the surface
+  float gy = 0.0045 + mound - dep - 0.012 + (uTO.w > 0.5 ? terrH(pos) : 0.);               // rooted a little below the surface (and on the real ground)
   float k = bi + 1.;
   float bs = h21(vec2(k * 3.17 + h1 * 11., h2 * 7. + k));                 // per blade
   float bs2 = h21(vec2(k * 1.91 + h3 * 13., h4 * 5. + k * 2.3));
@@ -902,11 +982,15 @@ void main(){
   vT = t;
   vN = normalize(mix(vec3(0., 1., 0.), normalize(vec3(dir.x, 0.35, dir.y)), 0.5));
   // colour: dark root to bright tip, per-tuft hue; follows the ground's dry patches
-  float dry = smoothstep(.55, .8, vn2(pos * 0.9 + 3.));
+  float dry = max(smoothstep(.55, .8, vn2(pos * 0.9 + 3.)), uGR.z);
   vec3 green = mix(vec3(0.045, 0.095, 0.026), vec3(0.075, 0.15, 0.04), h4);
   vec3 tipG = mix(vec3(0.13, 0.28, 0.06), vec3(0.19, 0.35, 0.07), h1);
   vec3 tipD = vec3(0.34, 0.30, 0.10);
   vec3 tip = mix(tipG, tipD, clamp(dry * (0.35 + 0.65 * h2) + smoothstep(0.7, 1., hgt * 3.2) * 0.25, 0., 0.9));
+  if (mkind > 0.5) {                                                    // crops: green stalks, golden when ripe
+    vec3 cg = mix(vec3(0.05, 0.13, 0.03), vec3(0.16, 0.3, 0.06), t), cr = mix(vec3(0.17, 0.12, 0.04), vec3(0.42, 0.33, 0.1), t);
+    vCol = mix(cg, cr, mkind > 1.5 ? 1. : smoothstep(0.7, 1., uGR.w) * 0.5) * (0.85 + 0.3 * bs);
+  } else
   vCol = mix(green, tip, smoothstep(0.0, 1.0, t)) * (0.85 + 0.3 * bs);
   vShadow = uLightVP * vec4(rel + vec3(0., 0.03, 0.), 1.);
   gl_Position = uVP * vec4(rel, 1.);

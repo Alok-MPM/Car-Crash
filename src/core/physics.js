@@ -227,6 +227,12 @@ export class Body {
     o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; q[0] = s[3]; q[1] = s[4]; q[2] = s[5]; q[3] = s[6];
     for (let i = 0; i < 9; i++) R[i] = s[7 + i];
   }
+  // the world was re-centred: move the body (and the pose it is interpolated from) by (dx, dy, dz)
+  shift(dx, dy, dz) {
+    this.pos[0] += dx; this.pos[1] += dy; this.pos[2] += dz;
+    const p = this.pp; if (p) { p[0] += dx; p[1] += dy; p[2] += dz; }
+    this.refresh();
+  }
   // true while the body visibly moves (the renderer keeps such bodies out of temporal anti-aliasing, whose history would smear them)
   moving() {
     if (this.fixed || this.sleeping) return false;
@@ -440,6 +446,7 @@ export class World {
     this.gravity = -9.81;
     this.ground = new Body({ fixed: true });
     this.groundOn = true;
+    this.terrain = null;    // the real ground (Bharat): {h(x,z), n(x,z,out), ceil(x0,z0,x1,z1), ray(o,d,maxT)}; null = the flat plane at y = 0
     this.contacts = [];
     this.pool = [];
     this.nc = 0;
@@ -492,6 +499,8 @@ export class World {
     if (nd) this.dyn = this.dyn.filter((b) => !set.has(b));
     if (this.statics.length) this.statics = this.statics.filter((b) => !set.has(b));
   }
+  // re-centre: every movable body moves by (dx, dy, dz); fixed bodies are not touched (the hand-built world is parked while the frame is not its own)
+  shiftDyn(dx, dy, dz) { for (const b of this.dyn) b.shift(dx, dy, dz); }
   // the static spatial hash is kept up to date body by body (a building waking or sleeping touches only its own cells, no full rebuild)
   _gridAdd(b) {
     const g = this.sgrid; if (!g || this.staticDirty) return;
@@ -510,7 +519,8 @@ export class World {
   // highest surface straight below (x, y0, z): ground, fixed pieces, rubble, furniture, cars. Used by the walking person to climb over things.
   // Only surfaces that are at or below y0 count (an origin inside a box does not hit it). skip: a body to ignore, groupMask: bodies in these groups are ignored.
   topBelow(x, y0, z, maxT, skip, ignoreGroups) {
-    let best = this.groundOn ? 0 : -Infinity;
+    const T = this.terrain;
+    let best = this.groundOn ? (T ? T.h(x, z) : 0) : -Infinity;
     const lo = y0 - maxT;
     for (const b of this.bodies) {
       if (b === skip || b.removed || b.person || (ignoreGroups && (b.group & ignoreGroups))) continue;
@@ -574,9 +584,12 @@ export class World {
   // ray against ground plane and static OBBs. returns {t, n:[..]} or null
   raycastStatic(o, d, maxT) {
     let best = null;
-    if (this.groundOn && d[1] < -1e-6) {
-      const t = -o[1] / d[1];
-      if (t >= 0 && t <= maxT) best = { t, n: [0, 1, 0], ground: true };
+    if (this.groundOn) {
+      if (this.terrain) { const r = this.terrain.ray(o, d, maxT); if (r) best = r; }
+      else if (d[1] < -1e-6) {
+        const t = -o[1] / d[1];
+        if (t >= 0 && t <= maxT) best = { t, n: [0, 1, 0], ground: true };
+      }
     }
     for (const b of this.statics) {
       for (const s of b.shapes) {
@@ -759,33 +772,36 @@ export class World {
         }
     }
     let t3 = performance.now(); T.stat = t3 - t2; T.sq = sq;
-    // ground
-    if (this.groundOn)
+    // ground (the flat plane, or the real terrain: a corner touches where it is below the terrain height at its own x, z)
+    if (this.groundOn) {
+      const TR = this.terrain;
       for (const b of bodies) {
         if (b.fixed || b.sleeping || b.removed) continue;
         if (!(b.mask & GROUP.STATIC)) continue;
-        if (b.aabb[1] > 0.02) continue;
+        if (b.aabb[1] > (TR ? TR.ceil(b.aabb[0], b.aabb[2], b.aabb[3], b.aabb[5]) : 0.02)) continue;
         for (const s of b.shapes) {
-          if (s.aabb[1] > 0.02) continue;
+          if (s.aabb[1] > (TR ? TR.ceil(s.aabb[0], s.aabb[2], s.aabb[3], s.aabb[5]) : 0.02)) continue;
           const m = s.m, c = s.c, e = s.he;
           for (let sx = -1; sx <= 1; sx += 2)
             for (let sy = -1; sy <= 1; sy += 2)
               for (let sz = -1; sz <= 1; sz += 2) {
                 const lx = sx * e[0], ly = sy * e[1], lz = sz * e[2];
                 const y = c[1] + m[1] * lx + m[4] * ly + m[7] * lz;
-                if (y < 0.003) {
-                  const x = c[0] + m[0] * lx + m[3] * ly + m[6] * lz;
-                  const z = c[2] + m[2] * lx + m[5] * ly + m[8] * lz;
-                  const ct = this.newContact();
-                  ct.a = this.ground; ct.b = b;
-                  ct.n[0] = 0; ct.n[1] = 1; ct.n[2] = 0;
-                  ct.p[0] = x; ct.p[1] = y * 0.5; ct.p[2] = z;
-                  ct.depth = -y;
-                  b.gcT = this.time; b.gcX = x; b.gcZ = z; b.gcV = Math.max(b.gcV || 0, -b.v[1]);
-                }
+                if (!TR && y >= 0.003) continue;
+                const x = c[0] + m[0] * lx + m[3] * ly + m[6] * lz;
+                const z = c[2] + m[2] * lx + m[5] * ly + m[8] * lz;
+                const gh = TR ? TR.h(x, z) : 0;
+                if (y - gh >= 0.003) continue;
+                const ct = this.newContact();
+                ct.a = this.ground; ct.b = b;
+                if (TR) TR.n(x, z, ct.n); else { ct.n[0] = 0; ct.n[1] = 1; ct.n[2] = 0; }
+                ct.p[0] = x; ct.p[1] = (y + gh) * 0.5; ct.p[2] = z;
+                ct.depth = gh - y;
+                b.gcT = this.time; b.gcX = x; b.gcZ = z; b.gcY = gh; b.gcV = Math.max(b.gcV || 0, -b.v[1]);
               }
         }
       }
+    }
     T.gnd = performance.now() - t3;
   }
 

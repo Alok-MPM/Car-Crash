@@ -12,6 +12,7 @@
 //    wherever the patch draws, and the instanced grass (drawn after the patch) is rooted in it.
 //  Method after MudRunner / Spintires (sparse blocks + a deformation texture the GPU samples, wheel footprints stamped as simple primitives, soft near, simple far).
 import { clamp } from '../../core/math.js';
+import { COVER } from '../bharat/regions.js';
 
 export const CELL = 0.125, BLK = 32, NB = 32, N = BLK * NB, WIN = N * CELL, BM = BLK * CELL;
 const PHALF = 18, PQ = 0.25, PY = 0.0045;   // terrain patch: half size, quad size, rest height (the lawn slabs sit here)
@@ -36,6 +37,12 @@ export class SoilField {
     this.store = new Map(); this.grassK = 1;   // grass density 0..1 (the frame-rate governor in main.js lowers it when the device struggles)
     this.bx0 = 1 << 30; this.bz0 = 1 << 30;
     this.ext = 0.6;
+    this.T = null; this.win = null;          // the real terrain (set by Bharat): cover / moisture come from its ground window
+    this.legacy = null;                       // {on, plateau:[x0,z0,x1,z1]}: inside the old proving ground / city the ground is the hand-built lawn
+    this.life = 1;                            // growth speed of torn grass (1 = about four minutes to cover a bare patch)
+    this.clock = 0; this.rg = new Set(); this.rgT = new Map(); this.scanI = 0; this._ph = { moist: 0.3, cover: 0.25 };
+    this.region = null;                       // grass look of the region [density, height, dryness, crop growth] (Bharat sets it from the ground window under the camera)
+    this._sf = {};
     this.dug = 0;      // cells dug so far (debug)
     this.spots = new Map();
     for (const t of trees) { const k = Math.floor(t.x / BM) + ':' + Math.floor(t.z / BM); (this.spots.get(k) || this.spots.set(k, []).get(k)).push({ x: t.x, z: t.z, r0: t.r0, ph: hash(Math.round(t.x * 10), Math.round(t.z * 10), 3) * 6.283 }); }
@@ -72,7 +79,7 @@ export class SoilField {
     this.patchModel[12] = pc.cx; this.patchModel[13] = PY; this.patchModel[14] = pc.cz;
     r.soil = { tex: this.tex, meta: this.meta, ox: this.bx0 * BM, oz: this.bz0 * BM, size: WIN, on: 1, patch: pc };
     r.add(this.patchMesh, this.patchModel, { cast: false });
-    r.grassCfg = { density: this.grassK, near: 7, far: 5 };
+    r.grassCfg = { density: this.grassK, near: 7, far: 5, region: this.region };
   }
   _makePatch() {
     const n = Math.round(2 * PHALF / PQ), v = n + 1, pos = new Float32Array(v * v * 3), nrm = new Float32Array(v * v * 3), col = new Float32Array(v * v * 3).fill(1), uv = new Float32Array(v * v * 2), idx = new Uint32Array(n * n * 6);
@@ -87,10 +94,10 @@ export class SoilField {
     for (let sz = 0; sz < NB; sz++) for (let sx = 0; sx < NB; sx++) {
       const bx = bx0 + mod(sx - bx0, NB), bz = bz0 + mod(sz - bz0, NB), si = sz * NB + sx;
       if (this.sbx[si] === bx && this.sbz[si] === bz) continue;
-      if (this.dirty[si]) this.store.set(this.sbx[si] + ':' + this.sbz[si], this._copyOut(si));
+      if (this.dirty[si]) { const key = this.sbx[si] + ':' + this.sbz[si], o = this._copyOut(si); o.t = this.clock; this.store.set(key, o); this.rg.delete(si); }
       this.dirty[si] = 0; this.sbx[si] = bx; this.sbz[si] = bz;
       const st = this.store.get(bx + ':' + bz);
-      if (st) this._copyIn(si, st); else this._gen(si, bx, bz);
+      if (st) { this._copyIn(si, st); this._regrowBlock(si, this.clock - (st.t || this.clock)); this.store.delete(bx + ':' + bz); this.dirty[si] = 1; this.rg.add(si); this.rgT.set(si, this.clock); } else this._gen(si, bx, bz);
       for (let r = 0; r < BLK; r++) this.metaData.fill(0, (sz * BLK + r) * N + sx * BLK, (sz * BLK + r) * N + sx * BLK + BLK);
       this.mq.push(si);
       this._gpu(si);
@@ -138,14 +145,26 @@ export class SoilField {
       if (bd > 8 && performance.now() - t0 > ms) break;                                    // blocks under the patch (within ~32 m) are never left waiting
     }
   }
+  // meta code of the ground at a point: 0 hard (road, rock, snow, floor) / 255 lawn / 200 green crop / 170 ripe crop / 140 bare or ploughed soil
+  _cover(x, z) {
+    const L = this.legacy;
+    if (L && L.on && x > L.plateau[0] && x < L.plateau[2] && z > L.plateau[1] && z < L.plateau[3]) return 255;
+    const W = this.win;
+    if (!W || !W.at(x, z, this._ph)) return 255;
+    const c = this._ph.cover;
+    if (c < 0) return 0;   // hard ground (rock / snow)
+    return c > 0.9 ? 170 : c > 0.65 ? 200 : c > 0.4 ? 140 : c > 0.1 ? 255 : 140;
+  }
   _metaBlock(si) {
-    const sx = si % NB, sz = (si / NB) | 0, bx = this.sbx[si], bz = this.sbz[si], x0 = bx * BM, z0 = bz * BM, md = this.metaData, hard = this.isHard;
+    const sx = si % NB, sz = (si / NB) | 0, bx = this.sbx[si], bz = this.sbz[si], x0 = bx * BM, z0 = bz * BM, md = this.metaData, L = this.legacy;
+    const hard = (x, z) => !!(L && L.on && this.isHard(x, z));
+    const code = this.T ? this._cover(x0 + BM / 2, z0 + BM / 2) : 255;
     let s0 = 0, s1 = 0;
-    for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) { if (hard(x0 + (i + 0.5) * 0.5, z0 + (j + 0.5) * 0.5)) s0 = 1; else s1 = 1; if (s0 && s1) break; }
+    if (code === 0) s0 = 1; else for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) { if (hard(x0 + (i + 0.5) * 0.5, z0 + (j + 0.5) * 0.5)) s0 = 1; else s1 = 1; if (s0 && s1) break; }
     for (let r = 0; r < BLK; r++) {
       const o = (sz * BLK + r) * N + sx * BLK;
-      if (!s0 || !s1) md.fill(s1 ? 255 : 0, o, o + BLK);
-      else for (let i = 0; i < BLK; i++) md[o + i] = hard(x0 + (i + 0.5) * CELL, z0 + (r + 0.5) * CELL) ? 0 : 255;
+      if (!s0 || !s1) md.fill(s1 ? code : 0, o, o + BLK);
+      else for (let i = 0; i < BLK; i++) md[o + i] = hard(x0 + (i + 0.5) * CELL, z0 + (r + 0.5) * CELL) ? 0 : code;
     }
     this._gpu(si);
   }
@@ -181,6 +200,83 @@ export class SoilField {
     for (const si of this.gpuList) this.gpu[si] = 0;
     this.gpuList.length = 0;
     gl.activeTexture(gl.TEXTURE0);
+  }
+
+  // ---------------------------------------------------------------- the real ground under a point: what it is and how a tyre behaves on it (EdgeSoil's physics)
+  //  moisture m (static regional value for now), cover (lawn / bare / ploughed / crop), compaction from the tyre prints. Water is not modelled here: it comes later through setSeason().
+  surfaceAt(x, z, Fn, speed, slip, out) {
+    const o = out || {};
+    let m = 0.3, cov = COVER.GRASS;
+    const L = this.legacy, inLeg = L && L.on && x > L.plateau[0] && x < L.plateau[2] && z > L.plateau[1] && z < L.plateau[3];
+    let hard = 0;
+    if (!inLeg && this.win && this.win.at(x, z, this._ph)) { m = this._ph.moist; cov = this._ph.cover; hard = this._ph.hard || 0; }
+    if (hard) {   // bare rock / scree (1) or snow and ice (2): no sinking, no dust, no mud
+      o.sink = 0.003; o.grip = hard === 2 ? 0.42 : 1; o.rr = hard === 2 ? 1.5 : 1; o.dust = 0; o.mud = 0; o.m = m; o.cover = 0; o.daldal = false; o.name = hard === 2 ? 'Snow and ice' : 'Bare rock';
+      return o;
+    }
+    let comp = 0; { const oo = this._off(Math.floor(x / CELL), Math.floor(z / CELL)); if (oo >= 0) comp = this.data[oo + 2] / 255; }
+    const till = cov > 0.4 && cov < 0.62 ? 1 : 0, grassy = cov > 0.1 && cov < 0.4 || cov > 0.62;
+    const dal = clamp((m - 0.84) * 3, 0, 1), root = (grassy ? 0.5 : 0) * 0.42 * (1 - slip * 0.85);
+    const soft = Math.max(0.08, 0.24 + m * m * 0.95 + till * 0.45 + dal * 1.45 - root - comp * 0.18);
+    const kg = (Fn || 3500) / 9.81;
+    o.sink = clamp((kg / 420) * 0.038 * soft, 0.003, dal > 0.45 ? 0.118 : 0.068);
+    const grip = clamp(0.88 - Math.max(0, m - 0.35) * 0.72 - dal * 0.45, 0.1, 0.92);
+    o.grip = grip / 0.88;                                                         // 1 = dry firm ground, lower when wet
+    o.rr = 1 + o.sink * 26 + till * 0.5 + Math.max(0, m - 0.55) * 1.2 + dal * 3.6;   // rolling resistance factor
+    const sf = Math.min(1, (speed || 0) / 2.2);
+    o.dust = (!grassy && m < 0.32) ? Math.pow(1 - m / 0.32, 1.35) * (sf + slip * 0.7) : 0;
+    o.mud = m > 0.48 ? Math.min(1.6, ((m - 0.48) / 0.42) * (sf * 1.15 + slip * 0.95)) : 0;
+    o.m = m; o.cover = cov; o.daldal = dal > 0.45;
+    o.name = dal > 0.45 ? 'Daldal (swamp)' : m > 0.65 ? 'Keechar (mud)' : grassy && cov < 0.4 ? 'Grassy turf' : till ? 'Kheti furrow' : cov > 0.62 ? 'Standing crop' : m > 0.32 ? 'Moist loam' : m < 0.14 ? 'Dry cracked loam' : 'Alluvial loam';
+    return o;
+  }
+  // torn grass grows back by itself (and so does the grass on a block that was away while it grew)
+  _regrowBlock(si, dt) {
+    if (dt <= 0) return;
+    const sx = si % NB, sz = (si / NB) | 0, d = this.data, k = Math.round(255 * dt * this.life / 240);
+    if (k <= 0) return;
+    let any = 0;
+    for (let r = 0; r < BLK; r++) for (let c = 0, o = ((sz * BLK + r) * N + sx * BLK) * 4 + 1; c < BLK; c++, o += 4) { if (d[o] > 0) { d[o] = Math.max(0, d[o] - k); any = 1; } }
+    if (any) this._gpu(si);
+  }
+  grow(dt) {
+    this.clock += dt;
+    if (!this.rg.size) return;
+    this.scanT = (this.scanT || 0) + dt;
+    if (this.scanT < 0.5) return; this.scanT = 0;
+    let n = 0;
+    for (const si of this.rg) {
+      const last = this.rgT.get(si) || this.clock; this._regrowBlock(si, this.clock - last); this.rgT.set(si, this.clock);
+      // a block whose grass is whole again stops being scanned
+      const sx = si % NB, sz = (si / NB) | 0, d = this.data; let left = 0;
+      for (let r = 0; r < BLK && !left; r++) for (let c = 0, o = ((sz * BLK + r) * N + sx * BLK) * 4 + 1; c < BLK; c++, o += 4) if (d[o] > 0) { left = 1; break; }
+      if (!left) { this.rg.delete(si); this.rgT.delete(si); }
+      if (++n >= 12) break;
+    }
+  }
+  // the frame of reference changed (a long drive): every stored print belongs to the old coordinates
+  reset() {
+    this.store.clear(); this.rg.clear(); this.rgT.clear(); this.data.fill(0); this.metaData.fill(0);
+    this.sbx.fill(1 << 30); this.sbz.fill(1 << 30); this.dirty.fill(0); this.mq.length = 0; this.gpuList.length = 0; this.gpu.fill(0); this.bx0 = 1 << 30; this.bz0 = 1 << 30; this._first = true;
+    const gl = this.gl; gl.activeTexture(gl.TEXTURE0 + 2); gl.bindTexture(gl.TEXTURE_2D, this.tex); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, N, gl.RGBA, gl.UNSIGNED_BYTE, this.data); gl.activeTexture(gl.TEXTURE0);
+  }
+
+  // the world is re-centred by (sx, sz): multiples of the 128 m window, so every block keeps its slot; only the block numbers change. Prints, pits and spoil heaps all stay where they are.
+  rebase(sx, sz) {
+    const bi = sx / BM, bj = sz / BM;
+    for (let si = 0; si < this.sbx.length; si++) if (this.sbx[si] !== 1 << 30) { this.sbx[si] -= bi; this.sbz[si] -= bj; }
+    if (this.bx0 !== 1 << 30) { this.bx0 -= bi; this.bz0 -= bj; }
+    const st = new Map();
+    for (const [k, v] of this.store) { const c = k.indexOf(':'); st.set((+k.slice(0, c) - bi) + ':' + (+k.slice(c + 1) - bj), v); }
+    this.store = st;
+  }
+  // the hand-built proving ground / city is in (on) or out of (off) the world: roads and tree root zones exist only while it is
+  setLegacy(on) {
+    const L = this.legacy; if (!L) return;
+    if (this._spotsHome === undefined) this._spotsHome = this.spots;
+    L.on = on; this.spots = on ? this._spotsHome : new Map();
+    this.mq.length = 0; this._first = true;
+    for (let si = 0; si < this.sbx.length; si++) if (this.sbx[si] !== 1 << 30) this.mq.push(si);
   }
 
   // ---------------------------------------------------------------- cell access
@@ -242,7 +338,7 @@ export class SoilField {
   // out layer by layer (slower the deeper it gets), heaps it behind the wheel and throws grass tufts and clods in the direction the rubber is pushing the ground.
   wheel(w, body, dt, player) {
     const cp = w.contact, Fn = w.Fn || 0;
-    if (!cp || !w.grounded || !w.soft || Fn < 120) { w._sx = undefined; return; }
+    if (!cp || !w.grounded || !w.soft || Fn < 120) { w._sx = undefined; w.gripS = undefined; w.rrS = undefined; return; }
     const x = cp[0], z = cp[2], Rm = body.R, cs = Math.cos(w.steer || 0), sn = Math.sin(w.steer || 0);
     let fx = -Rm[6] * cs + Rm[0] * sn, fz = -Rm[8] * cs + Rm[2] * sn;
     const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
@@ -250,11 +346,15 @@ export class SoilField {
     const wr = (w.omega || 0) * w.R, vl = w.vlong || 0, vt = w.vlat || 0;
     let pxv = (vl - wr) * fx + vt * lx, pzv = (vl - wr) * fz + vt * lz;        // the way the rubber moves over the ground = the way it pushes the soil
     const vs = Math.hypot(pxv, pzv), spd = Math.hypot(vl, vt), lk = clamp(Fn / 3500, 0.25, 2);
+    // what this ground is (EdgeSoil's model, by region): how deep a tyre sinks, how much grip and rolling resistance it gives, whether it throws dust or mud
+    const sf = this.surfaceAt(x, z, Fn, spd, clamp(vs / Math.max(spd, 3), 0, 1), this._sf);
+    w.gripS = 0.68 * sf.grip; w.rrS = sf.rr; w.surfName = sf.name;
+    const gy = cp[1];
     const hw = (w.tw || 0.22) * 0.5, d = this.data;
     if (w._sx === undefined || Math.hypot(x - w._sx, z - w._sz) > 3) { w._sx = x; w._sz = z; }
     const sx0 = w._sx, sz0 = w._sz, dx = x - sx0, dz = z - sz0, len = Math.hypot(dx, dz), steps = clamp(Math.ceil(len / 0.07), 1, 14);
     const firm = 0.65 + 0.8 * vnoise(x * 0.17, z * 0.17, 2);
-    const d0 = (0.004 + 0.016 * lk) * firm * clamp(1.25 - spd / 30, 0.4, 1) / DIG;           // rolling rut, about 1 - 2 cm
+    const d0 = (0.004 + 0.016 * lk) * firm * clamp(1.25 - spd / 30, 0.4, 1) * clamp(sf.sink / 0.026, 0.35, 4.5) / DIG;           // rolling rut: 1 - 2 cm on firm ground, 5 - 9 cm in keechar, deeper in daldal
     const c0 = Math.min(255, 130 + 90 * lk);
     const spin = vs > 1.2, tear = clamp((vs - 0.8) * 0.9, 0, 6) * dt / steps * 255, digRate = spin ? 0.0075 * Math.min(vs, 20) * lk * dt / steps / DIG : 0;
     let vol = 0;
@@ -277,21 +377,33 @@ export class SoilField {
       }
     }
     w._sx = x; w._sz = z;
+    const fxs = this.fx, bv = body.v;
+    if (fxs && fxs.ps.length < 1700) {
+      // dry ground: dust rolls up behind the tyre in proportion to speed and slip; wet ground: mud flicks off it
+      if (sf.dust > 0.08 && spd > 1.5) {
+        let nd = sf.dust * Math.min(1, spd / 9) * (0.45 + 0.5 * Math.min(1, vs / 6)) * dt * 60 * (player ? 1 : 0.5) * 0.9; nd = (nd | 0) + (Math.random() < nd % 1 ? 1 : 0);
+        for (let k = 0; k < nd; k++) fxs.dust([x + (Math.random() - 0.5) * hw, gy + 0.12, z + (Math.random() - 0.5) * 0.2], [bv[0] * 0.25 + (Math.random() - 0.5) * 1.2, 0.5 + Math.random() * 1.4, bv[2] * 0.25 + (Math.random() - 0.5) * 1.2], Math.min(1, sf.dust * 0.9 + 0.1));
+      }
+      if (sf.mud > 0.08 && spd > 2) {
+        let nm = Math.min(3, sf.mud * 1.3 * Math.min(1, vs / 3 + 0.25) * dt * 60 * (player ? 1 : 0.5) * 0.5); nm = (nm | 0) + (Math.random() < nm % 1 ? 1 : 0);
+        const mc = [0.1 + 0.04 * Math.random(), 0.065, 0.035];
+        for (let k = 0; k < nm; k++) fxs.clod([x + (Math.random() - 0.5) * hw * 1.4, gy + 0.08, z + (Math.random() - 0.5) * 0.2], [bv[0] * 0.5 - fx * (1 + Math.random() * Math.min(4, spd * 0.18)) + (Math.random() - 0.5) * 1.4, 1.2 + Math.random() * Math.min(3.5, 0.1 * spd + 0.8), bv[2] * 0.5 - fz * (1 + Math.random() * Math.min(4, spd * 0.18)) + (Math.random() - 0.5) * 1.4], mc);
+      }
+    }
     if (!spin) return;
     // spoil heap behind the wheel, thrown clods and grass tufts
     const pn = vs || 1, ux = pxv / pn, uz = pzv / pn;
     if (vol > 0) this._heap(x + ux * (0.4 + 0.04 * Math.min(vs, 12)), z + uz * (0.4 + 0.04 * Math.min(vs, 12)), 0.3, vol * 1.3);
-    const fxs = this.fx;
     if (!fxs || fxs.ps.length > 1900) return;
     let n = Math.min(5, vs * 0.1 * lk * dt * 60 * (player ? 1 : 0.5)); n = (n | 0) + (Math.random() < n % 1 ? 1 : 0);
-    const st = this.stateAt(x, z), grassy = st[1] < 0.55, bv = body.v;
+    const st = this.stateAt(x, z), grassy = st[1] < 0.55;
     for (let k = 0; k < n; k++) {
       const sp = 0.8 + Math.random() * 0.22 * vs, vy = 1.6 + Math.random() * Math.min(5.5, 0.2 * vs + 1);
       const v = [bv[0] * 0.6 + ux * sp + (Math.random() - 0.5) * 1.8 + lx * (Math.random() - 0.5), vy, bv[2] * 0.6 + uz * sp + (Math.random() - 0.5) * 1.8 + lz * (Math.random() - 0.5)];
-      const p = [x + (Math.random() - 0.5) * hw * 1.6, 0.06, z + (Math.random() - 0.5) * 0.2];
+      const p = [x + (Math.random() - 0.5) * hw * 1.6, gy + 0.06, z + (Math.random() - 0.5) * 0.2];
       if (grassy && Math.random() < 0.6) fxs.tuft(p, v, GRASS);
       else fxs.clod(p, v, soilCol(st[0] + Math.random() * 0.03, Math.random()));
     }
-    if (!grassy && vs > 4 && Math.random() < 0.07 * dt * 60) fxs.smoke([x, 0.1, z], [bv[0] * 0.3 + ux * 0.8, 0.5, bv[2] * 0.3 + uz * 0.8], 0.35 + 0.05 * Math.min(vs, 10), 1.4, [0.5, 0.4, 0.3], 0.07);   // only a thin brown dust from dry bare soil, never tyre smoke
+    if (!grassy && vs > 4 && Math.random() < 0.07 * dt * 60) fxs.smoke([x, gy + 0.1, z], [bv[0] * 0.3 + ux * 0.8, 0.5, bv[2] * 0.3 + uz * 0.8], 0.35 + 0.05 * Math.min(vs, 10), 1.4, [0.5, 0.4, 0.3], 0.07);   // only a thin brown dust from dry bare soil, never tyre smoke
   }
 }

@@ -26,6 +26,8 @@ export class Scene {
     this.props = [];
     this.statics = [];
     this.q = opts.density ?? 1;
+    this.legacyOn = true;       // the hand-built proving ground + city is in the world (the frame is its own); false while the player is somewhere else in Bharat
+    this.groundPlane = true;    // draw the old flat ground sheet (off while the real terrain is there)
     this.tex = {};
     this.meshes = {};
     this.makeTextures();
@@ -377,6 +379,7 @@ export class Scene {
   }
 
   update(dt) {
+    if (!this.legacyOn) return;
     this.structures.update(dt);
     if (this.land) this.land.treeField.update(dt);
     // remove props that fell absurdly far
@@ -386,7 +389,8 @@ export class Scene {
   // ---------- drawing ----------
   draw(cam) {
     const { r } = this;
-    r.add(this.ground, this._gm || (this._gm = m4.fromTRS(new Float32Array(16), [0, 0, 0], [0, 0, 0, 1], 1)), { cast: false });
+    if (!this.legacyOn) { if (this.land) this.land.soil.draw(cam); return; }   // away from home: only the deformable soil patch + grass (the terrain itself is drawn by Bharat)
+    if (this.groundPlane) r.add(this.ground, this._gm || (this._gm = m4.fromTRS(new Float32Array(16), [0, 0, 0], [0, 0, 0, 1], 1)), { cast: false });
     for (const t of this.tarmac) r.add(t.m, t.model, { cast: false });
     for (const m of this.marks) r.add(m, this.markModel, { cast: false });
     if (this.streetMeshes) for (const m of this.streetMeshes) r.add(m, this.markModel, { cast: false });

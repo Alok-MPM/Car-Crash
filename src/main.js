@@ -12,6 +12,8 @@ import { Sfx } from './core/audio.js';
 import { paintDecals } from './engines/cars/carmodel.js';
 import { SHAPES } from './engines/cars/shapes.js';
 import { m4, clamp, lerp, smoothstep } from './core/math.js';
+import { Bharat, HOME } from './engines/bharat/bharat.js';
+import { initBharatUI } from './ui/bharatui.js';
 
 const $ = (id) => document.getElementById(id);
 const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
@@ -56,6 +58,9 @@ const ctx = {
   },
 };
 let scene = null;
+let bharat = null, bhUI = null;
+const gAt = (x, z) => (world.terrain ? world.terrain.h(x, z) : 0);   // height of the real ground (0 = the old flat ground)
+let parkedCars = [];
 let cars = [];
 let player = null;
 let shake = 0, redFlash = 0, slowT = 0, timeScale = 1, userSlow = false, paused = false;
@@ -92,8 +97,10 @@ function applyTop(kmh) {
 function makePlayer(keepPose) {
   const spec = getCar(S.car);
   let pos = SPAWN.pos, yaw = SPAWN.yaw;
+  if (player && bharat && bharat.on && !bharat.atHome) { const b = player.body; pos = [b.pos[0], 0, b.pos[2]]; yaw = Math.atan2(b.R[6], b.R[8]); }
+  pos = [pos[0], gAt(pos[0], pos[2]), pos[2]];
   if (player) { cars.splice(cars.indexOf(player), 1); player.dispose(); }
-  const c = new Car(ctx, spec, { color: spec.colors[S.color % spec.colors.length], pos: [pos[0], spec.geo.cgY + 0.15, pos[2]], q: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)], assist: S.assist });
+  const c = new Car(ctx, spec, { color: spec.colors[S.color % spec.colors.length], pos: [pos[0], pos[1] + spec.geo.cgY + 0.15, pos[2]], q: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)], assist: S.assist });
   c.vehicle.reset(pos, yaw);
   cars.unshift(c);
   player = c;
@@ -104,8 +111,8 @@ function makePlayer(keepPose) {
 }
 function spawnNPC(id, x, z, yaw, colorIdx) {
   const spec = getCar(id);
-  const c = new Car(ctx, spec, { color: spec.colors[(colorIdx ?? Math.floor(Math.random() * spec.colors.length)) % spec.colors.length], pos: [x, spec.geo.cgY + 0.1, z], q: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)], npc: true });
-  c.vehicle.reset([x, 0, z], yaw);
+  const c = new Car(ctx, spec, { color: spec.colors[(colorIdx ?? Math.floor(Math.random() * spec.colors.length)) % spec.colors.length], pos: [x, gAt(x, z) + spec.geo.cgY + 0.1, z], q: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)], npc: true });
+  c.vehicle.reset([x, gAt(x, z), z], yaw);
   cars.push(c);
   return c;
 }
@@ -124,7 +131,7 @@ function populateNPCs() {
 let soundBudget = 0;
 function blast(pos, R = 11, power = 10) {
   fx.explosion(pos); sfx.boom(pos);
-  if (scene.land && scene.land.roadHole && pos[1] < 4) scene.land.roadHole(pos[0], pos[2], Math.max(0.9, R * 0.2));
+  if (scene.legacyOn && scene.land && scene.land.roadHole && pos[1] < 4) scene.land.roadHole(pos[0], pos[2], Math.max(0.9, R * 0.2));
   lastBlast = { pos: pos.slice(), t: 0 };
   scene.wakeAround(pos[0], pos[2], R + 4);                                    // an explosion reaches buildings and props that were asleep
   shake = Math.max(shake, clamp(1.2 - dist(pos, camPos) / 40, 0.1, 1.2));
@@ -212,7 +219,7 @@ function toggleWalk() {
     if (c.vehicle.speed > 2.5) { toast('Stop the car first', ''); return; }
     const g = c.spec.geo;
     const p = b.toWorld([-(g.W / 2 + 0.7), 0, -g.L * 0.1]);
-    person.spawn([p[0], 0.05, p[2]], camYaw);
+    person.spawn([p[0], gAt(p[0], p[2]) + 0.05, p[2]], camYaw);
     bag();
     toast('Walking - doors open by themselves. Car button: back in the car from anywhere', '');
     return;
@@ -412,7 +419,7 @@ function updateCamera(dt) {
     eye = [cp[0] + Math.sin(orbitYaw) * Math.cos(orbitPitch) * d, cp[1] + 0.4 + Math.sin(orbitPitch) * d, cp[2] + Math.cos(orbitYaw) * Math.cos(orbitPitch) * d];
     look = [cp[0], cp[1] + 0.5, cp[2]];
   } else {
-    if (!tvPos || dist3(tvPos, cp) > 90) { const a = camYaw + 0.9 + Math.random() * 0.6; tvPos = [cp[0] + Math.sin(a) * 55 + b.v[0] * 1.2, 2.5 + Math.random() * 2, cp[2] + Math.cos(a) * 55 + b.v[2] * 1.2]; }
+    if (!tvPos || dist3(tvPos, cp) > 90) { const a = camYaw + 0.9 + Math.random() * 0.6, tx = cp[0] + Math.sin(a) * 55 + b.v[0] * 1.2, tz = cp[2] + Math.cos(a) * 55 + b.v[2] * 1.2; tvPos = [tx, gAt(tx, tz) + 2.5 + Math.random() * 2, tz]; }
     eye = tvPos; look = [cp[0], cp[1] + 0.6, cp[2]];
     camFov = clamp(18 + 900 / Math.max(25, dist3(tvPos, cp)), 18, 50);
   }
@@ -422,7 +429,7 @@ function updateCamera(dt) {
     shake *= Math.exp(-dt * 5);
   }
   if (c.vehicle.speed > 60 && (camMode === 2 || camMode === 3)) { const j = (c.vehicle.speed - 60) * 0.0006; eye[1] += (Math.random() - 0.5) * j; }
-  eye[1] = Math.max(eye[1], 0.35);
+  eye[1] = Math.max(eye[1], gAt(eye[0], eye[2]) + 0.35);
   camPos = eye; camLook = look;
 }
 const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -434,7 +441,7 @@ function flipUpright() {
   if (!player) return;
   const b = player.body;
   const yaw = Math.atan2(b.R[6], b.R[8]);
-  b.setPose([b.pos[0], player.spec.geo.cgY + 0.6, b.pos[2]], yawQuat(yaw));
+  b.setPose([b.pos[0], gAt(b.pos[0], b.pos[2]) + player.spec.geo.cgY + 0.6, b.pos[2]], yawQuat(yaw));
   b.v = [0, 0, 0]; b.w = [0, 0, 0];
   toast('Upright', '');
 }
@@ -444,19 +451,21 @@ function repair() {
   const b = player.body;
   const fwd = [-b.R[6], 0, -b.R[8]];
   const yaw = Math.atan2(-fwd[0], -fwd[2]);
-  const pos = [b.pos[0], 0, b.pos[2]];
+  const pos = [b.pos[0], gAt(b.pos[0], b.pos[2]), b.pos[2]];
   const spec = player.spec;
   const old = player; old.dead = true; old.fire = -1; old.exploded = true;
   for (let i = ctx.debris.length - 1; i >= 0; i--) if (ctx.debris[i].car === old) ctx.debris[i].t = 999;
   cars.splice(cars.indexOf(player), 1); player.dispose();
   if (fx.clearNear) fx.clearNear(pos, 14);
-  const c = new Car(ctx, spec, { color: spec.colors[S.color % spec.colors.length], pos: [pos[0], spec.geo.cgY + 0.2, pos[2]], q: yawQuat(yaw), assist: S.assist });
+  const c = new Car(ctx, spec, { color: spec.colors[S.color % spec.colors.length], pos: [pos[0], pos[1] + spec.geo.cgY + 0.2, pos[2]], q: yawQuat(yaw), assist: S.assist });
   c.vehicle.reset(pos, yaw);
   cars.unshift(c); player = c;
   toast('Repaired', 'Fresh from the shop');
 }
-function gotoCity() {
+async function ensureHome() { if (bharat && bharat.on && !bharat.atHome) await bharat.teleport(HOME.lat, HOME.lon, 0); }
+async function gotoCity() {
   if (!player || !scene.cityPlan) return;
+  await ensureHome();
   const P = scene.cityPlan; if (person.active) backToCar();
   // start on the main east-west road of the city, driving east
   const bz = P.roads.find((q) => q.type === 'bazaar' && q.axis === 'x'); const z0 = bz ? bz.c + 2.5 : P.cz;
@@ -465,9 +474,10 @@ function gotoCity() {
   camYaw = -Math.PI / 2;
   toast('City: roads, lots, parking, farms around. Buildings stream in as you drive', 'City');
 }
-function gotoStreet() {
+async function gotoStreet() {
   // the designed (showcase) buildings stand on real lots of the city; this puts the car on the road in front of the next one
   const P = scene.cityPlan; if (!player || !P || !P.showcase.length) return;
+  await ensureHome();
   const L = P.showcase[streetIx++ % P.showcase.length];
   if (person.active) backToCar();
   const z = L.roadC + 3;
@@ -761,7 +771,7 @@ function scanMovers() {
   for (const b of world.bodies) {
     if (b.fixed || b.sleeping || b.removed || b.person || (b.userData && b.userData.vehicle)) continue;
     const sp2 = b.v[0] * b.v[0] + b.v[2] * b.v[2];
-    if (sp2 < 4 || b.pos[1] < -5) continue;
+    if (sp2 < 4 || b.pos[1] < gAt(b.pos[0], b.pos[2]) - 5) continue;
     if (b.mass < 25 && b.mass * Math.sqrt(sp2) < 120) continue;                        // a flying brick or plaster flake must not wake a whole house: only heavy pieces (panels, slabs, big lumps) do
     const k = Math.max(2, Math.sqrt(sp2) * 0.2) / Math.sqrt(sp2);
     debrisPts.push({ x: b.pos[0], z: b.pos[2], x2: b.pos[0] + b.v[0] * k, z2: b.pos[2] + b.v[2] * k, r: 1.5, own: (b.rub && b.rub.B) || (b.panel && b.panel.B) || null });   // own: the wreck it came from (it must not keep its own wreck awake for ever)
@@ -784,6 +794,7 @@ function wakeWatchers() {
   return foci;
 }
 function watchBuildings() {
+  if (!scene.legacyOn) return;                        // the proving ground / city is parked while the player is elsewhere in Bharat
   scanMovers();
   const foci = wakeWatchers();
   if (scene.city) { if (!foci.length && player && player.vehicle) foci.push({ x: player.vehicle.body.pos[0], z: player.vehicle.body.pos[2], vx: 0, vz: 0 }); scene.city.update(1 / 60, foci); }
@@ -874,12 +885,14 @@ function frame(t) {
   else if (menuOpen) { player.vehicle.in.throttle = 0; player.vehicle.in.brake = 0.4; player.vehicle.in.steer = 0; player.vehicle.in.handbrake = 1; }
   else { const vi = player.vehicle.in; vi.throttle = inp.throttle; vi.brake = inp.brake; vi.steer = inp.steer; vi.handbrake = inp.hb; vi.reverse = reverseOn; }
   if (slowT > 0) slowT -= dt;
+  if (bharat) bharat.preFrame(player.body.pos);       // re-centre the world when the player is 7 km from the origin
   const _t0 = performance.now();
   watchBuildings();
   stepPhysics(dt);
   const _t1 = performance.now();
   const sdt = dt * timeScale;
   scene.update(sdt);
+  if (scene.land && scene.land.soil) scene.land.soil.grow(sdt);
   updateLiftCard(person.active ? scene.structures.liftUI(person) : null);
   const _t2 = performance.now();
   for (const c of cars) c.update(sdt);
@@ -913,13 +926,13 @@ function frame(t) {
       if (sp > 3.5) {
         const fw = [b.v[0], 0, b.v[2]];
         const k = Math.min(1, sp / 18);
-        for (let i = 0; i < 2; i++) if (Math.random() < k) fx.spark([b.gcX, 0.05, b.gcZ], [-b.v[0] * 0.2 + (Math.random() - 0.5) * 4, 1.5 + Math.random() * 3, -b.v[2] * 0.2 + (Math.random() - 0.5) * 4]);
+        for (let i = 0; i < 2; i++) if (Math.random() < k) fx.spark([b.gcX, (b.gcY || 0) + 0.05, b.gcZ], [-b.v[0] * 0.2 + (Math.random() - 0.5) * 4, 1.5 + Math.random() * 3, -b.v[2] * 0.2 + (Math.random() - 0.5) * 4]);
         fx.gouge(c.id + '' + b.id, b.gcX, b.gcZ, fw, 0.16, 0.5 * k + 0.2);
       }
       if (b.gcV > 4.5 && !c.npc || b.gcV > 7) {
         const sz = clamp(b.gcV / 10, 0.4, 1.6);
         fx.crater(b.gcX, b.gcZ, sz, 0.7);
-        for (let i = 0; i < 10; i++) fx.dust([b.gcX, 0.1, b.gcZ], [(Math.random() - 0.5) * 4, 1 + Math.random() * 2, (Math.random() - 0.5) * 4], 0.7);
+        for (let i = 0; i < 10; i++) fx.dust([b.gcX, (b.gcY || 0) + 0.1, b.gcZ], [(Math.random() - 0.5) * 4, 1 + Math.random() * 2, (Math.random() - 0.5) * 4], 0.7);
       }
       b.gcV = 0;
     } else { if (b.gcT !== undefined) fx.gouge(c.id + '' + b.id, 0, 0, [0, 0, 1], 0.1, 0); b.gcV = 0; }
@@ -927,10 +940,11 @@ function frame(t) {
   trackStats(sdt);
   // debris housekeeping
   const deb = ctx.debris;
-  for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if ((d.kind !== 'rubble' && d.t > 45) || d.t > 900 || d.body.pos[1] < -30 || deb.length > 1000 && i < deb.length - 1000) { world.remove(d.body); deb.splice(i, 1); } }
+  for (let i = deb.length - 1; i >= 0; i--) { const d = deb[i]; d.t += dt; if ((d.kind !== 'rubble' && d.t > 45) || d.t > 900 || d.body.pos[1] < gAt(d.body.pos[0], d.body.pos[2]) - 30 || deb.length > 1000 && i < deb.length - 1000) { world.remove(d.body); deb.splice(i, 1); } }
   // camera (everything from here to the end of the draw sees the interpolated poses)
   blendBodies();
   updateCamera(dt);
+  if (bharat) bharat.update(dt, camPos, player.body.pos);
   // audio
   sfx.cam = camPos;
   if (sfx.ctx && !menuOpen) {
@@ -943,10 +957,12 @@ function frame(t) {
   // render
   r.time = now;
   if (window.__camOv) { camPos = window.__camOv.eye; camLook = window.__camOv.look; if (window.__camOv.fov) camFov = window.__camOv.fov; }
-  r.begin({ eye: camPos, target: camLook, fov: camFov, near: camMode === 2 || camMode === 3 || (lab && lab.active) || person.active ? 0.25 : 0.4, far: 9000, shadowCenter: [player.body.pos[0], 0, player.body.pos[2]] });
+  r.begin({ eye: camPos, target: camLook, fov: camFov, near: camMode === 2 || camMode === 3 || (lab && lab.active) || person.active ? 0.25 : 0.4, far: 9000, shadowCenter: [player.body.pos[0], player.body.pos[1] - 1, player.body.pos[2]] });
   fx.beginBlobs();
   const _d0 = performance.now();
+  if (bharat) scene.groundPlane = !bharat.on || !bharat.T.nearReady;   // the old flat lawn shows only until the real ground within 400 m is built
   scene.draw(camPos);
+  if (bharat) bharat.draw();
   if (lab && lab.active && lab.draw) lab.draw(r);
   for (const c of cars) c.draw();
   person.draw();
@@ -969,6 +985,7 @@ function frame(t) {
   const _d2 = performance.now();
   PF.dr = PF.dr * 0.9 + (_d1 - _d0) * 0.1; PF.rn = PF.rn * 0.9 + (_d2 - _d1) * 0.1;
   updateHud(dt);
+  if (bhUI) bhUI.tick(dt);
   if (perfLab.active) perfLab.tick(t, performance.now() - _f0);
 }
 
@@ -987,8 +1004,38 @@ async function boot() {
   for (const b of world.bodies) if (!b.fixed && b.group === 2 && !b.sleeping && !(b.userData && b.userData.vehicle) && !b.person) b.sleep();   // every resting prop starts asleep, so the 10 m bubble can shelve it
   scene.structures.sleepAll(); watchBuildings();
   syncMenu();
+  // ---- the real ground of Bharat (elevation tiles are fetched here; without them the old flat ground stays)
+  const ld = $('loading').lastElementChild; if (ld) ld.textContent = 'Loading real terrain (Bharat)...';
+  bharat = new Bharat({
+    r, world, fx, soil: scene.land.soil,
+    api: {
+      pos: () => (player ? player.body.pos : [0, 0, 40]),
+      keepBodies: () => { const k = new Set(); if (player) k.add(player.body); if (person.active && person.body) k.add(person.body); return k; },
+      // the hand-built proving ground + city leaves / re-enters the world; its parked cars with it
+      setLegacy: (on) => {
+        scene.legacyOn = on;
+        if (!on) { parkedCars = cars.filter((c) => c !== player); for (const c of parkedCars) cars.splice(cars.indexOf(c), 1); }
+        else { for (const c of parkedCars) cars.push(c); parkedCars = []; }
+      },
+      // the world was re-centred by (sx, dy, sz)
+      shift: (sx, dy, sz) => {
+        fx.shift(sx, dy, sz); r.shiftWorld(sx, dy, sz); tvPos = null; lastBlast = null; debrisPts = [];
+        camPos = [camPos[0] - sx, camPos[1] + dy, camPos[2] - sz]; camLook = [camLook[0] - sx, camLook[1] + dy, camLook[2] - sz];
+      },
+      clearTransients: () => {
+        for (const d of ctx.debris) world.remove(d.body); ctx.debris.length = 0;
+        for (const c of cars.slice()) if (c !== player) { cars.splice(cars.indexOf(c), 1); c.dispose(); }
+        tvPos = null; lastBlast = null;
+      },
+      place: (x, y, z, yaw) => { if (person.active) backToCar(); player.vehicle.reset([x, y, z], yaw); camYaw = yaw; tvPos = null; },
+      busy: (text) => { const L = $('loading'); if (text) { L.style.display = 'flex'; const d = L.lastElementChild; if (d) d.textContent = text; } else L.style.display = 'none'; },
+      toast: (a, b) => toast(a, b),
+    },
+  });
+  await bharat.init(9000);
+  bhUI = initBharatUI({ bharat, getPlayer: () => player, toast, $, inMenu: () => menuOpen });
   $('loading').style.display = 'none';
   requestAnimationFrame((t) => { last = t / 1000; frame(t); });
-  window.__game = { setLod2, perfLab, watch: watchBuildings, life, get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
+  window.__game = { get bharat() { return bharat; }, setLod2, perfLab, watch: watchBuildings, life, get lab() { return lab; }, person, toggleWalk, orbit: (y, p, d) => { orbitYaw = y; orbitPitch = p; orbitDist = d; }, hold: (v) => { dragging = v; }, get player() { return player; }, cars, world, ctx, fx, scene, r, S, blast, spawnNPC, camPos: () => camPos };
 }
 setTimeout(() => { boot().catch((e) => { console.error(e); $('loading').innerHTML = '<div style="padding:24px;text-align:center">Failed to start: ' + String(e.message || e).slice(0, 300) + '</div>'; }); }, 30);

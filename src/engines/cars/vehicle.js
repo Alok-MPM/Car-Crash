@@ -175,7 +175,7 @@ export class Vehicle {
   reset(pos, yaw = 0) {
     const b = this.body, g = this.spec.geo;
     const q = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
-    b.setPose([pos[0], g.cgY + 0.15, pos[2]], q);
+    b.setPose([pos[0], (pos[1] || 0) + g.cgY + 0.15, pos[2]], q);
     b.v = [0, 0, 0]; b.w = [0, 0, 0];
     for (const w of this.wheels) { w.omega = 0; w.susp = w.L0 - g.cs; }
     this.gear = 1; this.rpm = this.spec.idle; this.steerAngle = 0;
@@ -356,7 +356,7 @@ export class Vehicle {
       // soft ground (lawn, field, bare soil) can be dug out below the y = 0 plane or heaped above it: the ray looks a little further and the hit is moved to the soil surface
       const so = this.world.soil, rmax = w.L0 + w.R;
       let hit = this.world.raycastStatic(origin, [-up[0], -up[1], -up[2]], so ? rmax + so.ext : rmax);
-      w.soft = false; w.sink = 0;
+      w.soft = false; w.sink = 0; w.gripS = undefined; w.rrS = undefined;
       if (hit && hit.ground && so && up[1] > 0.4) {
         const px = origin[0] - up[0] * hit.t, pz = origin[2] - up[2] * hit.t;
         if (so.soft(px, pz)) {
@@ -494,7 +494,7 @@ export class Vehicle {
       const KP = 0.12, TP = 0.13;
       const loadRef = (s.kg * G) / 4;
       const muEff = s.mu * clamp(1 - 0.2 * (Fn / loadRef - 1), 0.62, 1.2) * (w.flat ? 0.35 : 1) * (1 - 0.25 * (1 - clamp(w.health, 0, 1)));
-      const mu = muEff * (w.surface ? 0.68 : 1) * (this.gripK || 1);
+      const mu = muEff * (w.gripS !== undefined ? w.gripS : w.surface ? 0.68 : 1) * (this.gripK || 1);
       const launchB = 1 + 0.3 * clamp(1 - Math.abs(vf) / 30, 0, 1);
       const Fmax = mu * Fn * launchB;
       const FmaxY = s.constLat ? mu * loadRef : mu * Fn;
@@ -523,7 +523,7 @@ export class Vehicle {
       if (this.assist >= 1 && brk > 0.02 && kappa < -0.15 && inp.handbrake < 0.1 && inp.throttle < 0.4) { Tb *= 0.12; this.absAct = 1; }
       // disc heat: brake power in, airflow cooling out
       w.bTemp = (w.bTemp || 25) + (Tb * Math.abs(w.omega) * dt) / 4200 - ((w.bTemp || 25) - 25) * (0.008 + 0.0025 * speed) * dt;
-      const Trr = (0.013 + (w.soft ? 0.03 + 0.5 * Math.max(0, w.sink) : 0)) * Fn * w.R;   // soft ground and ruts: the tyre has to climb its own hollow
+      const Trr = (0.013 * (w.soft && w.rrS ? w.rrS : 1) + (w.soft ? (w.rrS ? 0.012 : 0.03) + 0.5 * Math.max(0, w.sink) : 0)) * Fn * w.R;   // soft ground and ruts: the tyre has to climb its own hollow
       const sg = clamp(w.omega / 0.12, -1, 1);
       const Tres = (Tb + Trr) * sg;
       const dOm = (Tdrive - Tres - w.R * Fx) / (Iw / dt + w.R * D);

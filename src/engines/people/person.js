@@ -77,7 +77,7 @@ export class Person {
     b.wake && b.wake();
     this.speed = Math.hypot(b.v[0], b.v[2]);
     this.walkT += dt * (this.speed * 1.9);
-    if (b.pos[1] < -20) { b.pos[1] = 2; b.v = [0, 0, 0]; }
+    { const T = w.terrain, gy = T ? T.h(b.pos[0], b.pos[2]) : 0; if (b.pos[1] < gy - 20) { b.pos[1] = gy + 2; b.v = [0, 0, 0]; } }
   }
 
   draw() {

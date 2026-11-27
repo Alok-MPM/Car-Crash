@@ -55,6 +55,13 @@ export class FX {
   glass(p, v) {
     this.add({ m: 3, p: [p[0], p[1], p[2]], v: [v[0], v[1], v[2]], s: 0.02 + Math.random() * 0.04, g: 0, life: 6 + Math.random() * 6, t: 0, c: [0.7, 0.85, 0.9], a: 1, drag: 0.05, up: -9.8, seed: Math.random(), rot: Math.random() * 6, rv: (Math.random() - 0.5) * 10, bounce: 0.25, solid: true });
   }
+  // the world was re-centred by (sx, dy, sz): every particle and ribbon moves with it
+  shift(sx, dy, sz) {
+    for (const q of this.ps) { q.p[0] -= sx; q.p[1] += dy; q.p[2] -= sz; }
+    const d = this.skidData, n = this.skidFull ? SKID_CAP : this.skidN;
+    for (let i = 0; i < n * 6; i++) { d[i * 9] -= sx; d[i * 9 + 1] += dy; d[i * 9 + 2] -= sz; }
+    this.last.clear();
+  }
   clearNear(p, R) { this.ps = this.ps.filter((q) => Math.hypot(q.p[0] - p[0], q.p[2] - p[2]) > R); }
   explosion(p) {
     this.flash = 1;
@@ -64,6 +71,7 @@ export class FX {
   }
 
   update(dt) {
+    const TT = this.world && this.world.terrain;     // the real ground (null = flat plane at y = 0)
     const ps = this.ps;
     for (let i = ps.length - 1; i >= 0; i--) {
       const p = ps[i];
@@ -84,11 +92,11 @@ export class FX {
           if (p.v[1] < -1.15) p.v[1] = -1.15;                                              // light and wide: terminal speed about 1 m/s
           p.v[0] += Math.cos(p.t * 2.3 + p.fl) * 1.5 * dt; p.v[2] += Math.sin(p.t * 1.8 + p.fl * 1.3) * 1.2 * dt;   // side-to-side flutter
         }
-        const gh = this.soil ? this.soil.heightAt(p.p[0], p.p[2]) : 0;
+        const gh = (this.soil ? this.soil.heightAt(p.p[0], p.p[2]) : 0) + (TT ? TT.h(p.p[0], p.p[2]) : 0);
         if (p.p[1] < 0.03 + gh) { p.p[1] = 0.03 + gh; p.landed = true; p.life = Math.min(p.life, p.t + (p.bal ? 0.6 : 5) + Math.random() * 3); }
         continue;
       }
-      const gh2 = this.soil && p.solid ? this.soil.heightAt(p.p[0], p.p[2]) : 0;
+      const gh2 = (this.soil && p.solid ? this.soil.heightAt(p.p[0], p.p[2]) : 0) + (TT && p.bounce !== undefined ? TT.h(p.p[0], p.p[2]) : 0);
       if (p.bounce !== undefined && p.p[1] < 0.02 + gh2) {
         p.p[1] = 0.02 + gh2;
         if (p.v[1] < 0) { p.v[1] = -p.v[1] * p.bounce; p.v[0] *= 0.6; p.v[2] *= 0.6; }
@@ -218,7 +226,7 @@ export class FX {
     // perpendicular (ground plane)
     const l = Math.hypot(fwd[0], fwd[2]) || 1;
     const sx = -fwd[2] / l, sz = fwd[0] / l;
-    const cur = { p: [p[0], 0.012, p[2]], sx, sz, a: alpha };
+    const TS = this.world && this.world.terrain, cur = { p: [p[0], 0.012 + (TS ? TS.h(p[0], p[2]) : 0), p[2]], sx, sz, a: alpha };
     if (last && Math.hypot(cur.p[0] - last.p[0], cur.p[2] - last.p[2]) < 4) {
       if (Math.hypot(cur.p[0] - last.p[0], cur.p[2] - last.p[2]) > 0.15) {
         this._quad(last, cur, width);
@@ -265,12 +273,12 @@ export class FX {
     const l = Math.hypot(fx, fz) || 1; fx /= l; fz /= l;
     const sx = -fz, sz = fx;
     const hl = geo.L * 0.62, hw = geo.W * 0.7;
-    const cx = body.pos[0], cz = body.pos[2];
-    const h = Math.max(0.2, 1 - body.pos[1] * 0.35);
-    const al = 0.55 * clamp(1.2 - body.pos[1] * 0.5, 0, 1);
+    const cx = body.pos[0], cz = body.pos[2], TB = this.world && this.world.terrain, gy = TB ? TB.h(cx, cz) : 0, by = body.pos[1] - gy;
+    const h = Math.max(0.2, 1 - by * 0.35);
+    const al = 0.55 * clamp(1.2 - by * 0.5, 0, 1);
     const d = this.blobData;
     let o = this.blobN * 54;
-    const put = (x, z, u, v) => { d[o++] = x; d[o++] = 0.008; d[o++] = z; d[o++] = u; d[o++] = v; d[o++] = 0; d[o++] = 0; d[o++] = 0; d[o++] = al; };
+    const put = (x, z, u, v) => { d[o++] = x; d[o++] = gy + 0.008; d[o++] = z; d[o++] = u; d[o++] = v; d[o++] = 0; d[o++] = 0; d[o++] = 0; d[o++] = al; };
     const P = (a, b) => [cx + fx * hl * a + sx * hw * b, cz + fz * hl * a + sz * hw * b];
     const c = [[-1, -1, 0, 0], [1, -1, 1, 0], [1, 1, 1, 1], [-1, -1, 0, 0], [1, 1, 1, 1], [-1, 1, 0, 1]];
     for (const [a, b, u, v] of c) { const p = P(a, b); put(p[0], p[1], u, v); }

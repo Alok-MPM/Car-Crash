@@ -30,6 +30,7 @@ function program(gl, vs, fs) {
   return { p, u };
 }
 
+const DEFAULT_REGION = [1, 1, 0, 1];   // grass: density factor, height factor, dryness, crop growth
 export const TOD = {
   day: { sun: [0.45, 0.78, 0.35], sunCol: [1.0, 0.93, 0.8], top: [0.18, 0.38, 0.78], hor: [0.62, 0.76, 0.92], skyI: 1.0, fog: [0.68, 0.78, 0.9], fogD: 0.00055, ground: [0.22, 0.22, 0.23], night: 0, cloud: 0.4, sunI: 2.9 },
   golden: { sun: [-0.7, 0.28, 0.5], sunCol: [1.0, 0.68, 0.38], top: [0.2, 0.3, 0.6], hor: [0.95, 0.62, 0.42], skyI: 0.85, fog: [0.85, 0.6, 0.45], fogD: 0.0006, ground: [0.2, 0.17, 0.15], night: 0, cloud: 0.5, sunI: 2.6 },
@@ -62,7 +63,7 @@ export class Renderer {
       present: program(gl, S.VS_POST, S.FS_PRESENT),
     };
     this.grassMesh = this._makeGrassMesh(8); this.grassMeshFar = this._makeGrassMesh(5); this.grassMeshTri = this._makeGrassMesh(8, true);
-    this.grassCfg = null;
+    this.grassCfg = null; this.terrWin = null;
     this.aniso = gl.getExtension('EXT_texture_filter_anisotropic');
     this.emptyVAO = gl.createVertexArray();
     this.setShadowSize(this.quality >= 2 ? 2048 : this.quality === 1 ? 1024 : 0);
@@ -308,6 +309,8 @@ export class Renderer {
   }
   // model: Float32Array(16) in WORLD space (not camera relative); opts: {cast:true}
   add(mesh, model, opts) { this.items.push({ mesh, model: Float32Array.from(model), cast: !opts || opts.cast !== false, over: opts && opts.over, only: opts && opts.only, hide: opts && opts.hide, dyn: !!(opts && opts.dyn) }); }
+  // the world was re-centred by (sx, dy, sz): the previous frame's eye moves with it (temporal AA re-projection)
+  shiftWorld(sx, dy, sz) { this.prevEye[0] -= sx; this.prevEye[1] += dy; this.prevEye[2] -= sz; }
   addLight(x, y, z, radius, r, g, b, dx = 0, dy = 0, dz = 0, cone = -2) {
     if (this.lights.length < 4) this.lights.push({ p: [x, y, z], r: radius, c: [r, g, b], d: [dx, dy, dz], cone });
   }
@@ -451,6 +454,14 @@ export class Renderer {
       gl.activeTexture(gl.TEXTURE0 + 3); gl.bindTexture(gl.TEXTURE_2D, this.soil.meta);
       const pc = this.soil.patch; gl.uniform4f(u.uTerrC, pc.cx, pc.cz, pc.half - 0.03, 1);
     } else { gl.uniform4f(u.uSoilO, 0, 0, 1, 0); gl.uniform4f(u.uTerrC, 0, 0, 0, 0); }
+    // terrain window (real ground heights + ground colour round the camera): units 5, 6
+    gl.uniform1i(u.uTH, 5); gl.uniform1i(u.uTG, 6);
+    const tw = this.terrWin;
+    if (tw && tw.on) {
+      gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, tw.th);
+      gl.activeTexture(gl.TEXTURE0 + 6); gl.bindTexture(gl.TEXTURE_2D, tw.tg);
+      gl.uniform4f(u.uTO, tw.ox, tw.oz, tw.size, 1);
+    } else gl.uniform4f(u.uTO, 0, 0, 128, 0);
     gl.activeTexture(gl.TEXTURE0);
 
     const trans = [];
@@ -618,7 +629,10 @@ export class Renderer {
     gl.uniform3f(u.uEye, e[0], e[1], e[2]);
     gl.uniform4f(u.uSoilO, so.ox, so.oz, so.size, 1);
     gl.uniform1f(u.uShadowOn, this.shadowTex ? 1 : 0);
-    gl.uniform1i(u.uShadowMap, 1); gl.uniform1i(u.uSoil, 2); gl.uniform1i(u.uMeta, 3);
+    gl.uniform1i(u.uShadowMap, 1); gl.uniform1i(u.uSoil, 2); gl.uniform1i(u.uMeta, 3); gl.uniform1i(u.uTH, 5);
+    const tw = this.terrWin, rg = G.region || DEFAULT_REGION;
+    if (tw && tw.on) { gl.activeTexture(gl.TEXTURE0 + 5); gl.bindTexture(gl.TEXTURE_2D, tw.th); gl.uniform4f(u.uTO, tw.ox, tw.oz, tw.size, 1); } else gl.uniform4f(u.uTO, 0, 0, 128, 0);
+    gl.uniform4f(u.uGR, rg[0], rg[1], rg[2], rg[3]);
     const gc = this.grassCars || [], ca = (this._gcA = this._gcA || new Float32Array(24)), cb = (this._gcB = this._gcB || new Float32Array(24));
     ca.fill(0); cb.fill(0);
     for (let i = 0; i < gc.length && i < 6; i++) { ca.set([gc[i][0], gc[i][1], gc[i][2], gc[i][3]], i * 4); cb.set([gc[i][4], gc[i][5], 0, 0], i * 4); }
